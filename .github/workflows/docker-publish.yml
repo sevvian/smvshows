@@ -34,19 +34,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare image name
+        id: imagename
+        run: |
+          echo "IMAGE=ghcr.io/${{ github.repository_owner }}/smvshows" >> $GITHUB_OUTPUT
+
       - name: Extract Docker metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/smvshows
+          images: ${{ steps.imagename.outputs.IMAGE }}
           tags: |
-            # Tag with git tag name on tag pushes, e.g. v1.2.3
             type=ref,event=tag
-            # Tag with SHA for traceability
             type=sha
-            # Latest only for main branch
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            # Optional manual tag provided via workflow_dispatch input
             type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' }}
 
       - name: Build and push Docker image
@@ -56,7 +57,9 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ steps.imagename.outputs.IMAGE }}:latest
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
