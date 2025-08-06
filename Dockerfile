@@ -1,27 +1,32 @@
-# Use an official Node.js runtime as a parent image
-FROM node:20-slim
+# syntax=docker/dockerfile:1.6
 
-# Install procps which contains the 'ps' command needed by Crawlee for memory monitoring
-RUN apt-get update && apt-get install -y procps && rm -rf /var/lib/apt/lists/*
-
-# Set the working directory for subsequent commands
+# Base image with Node
+FROM node:20-slim AS base
 WORKDIR /app
 
-# Create a dedicated directory for persistent data. This is where the volume will be mounted.
-RUN mkdir /data
+# Install only prod dependencies without using or creating lockfiles
+# We copy only package.json to avoid sending source yet
+FROM base AS deps
+COPY package.json ./
+# Note: --no-package-lock prevents generating a lock file
+RUN npm install --only=production --no-audit --no-fund --no-package-lock
 
-# Copy the 'public' directory containing the admin UI into the image
-COPY public/ ./public/
+# Create minimal runtime image
+FROM node:20-slim AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
 
-# Copy package files and install production dependencies
-COPY package*.json ./
-RUN npm install --omit=dev
+# Copy installed node_modules from deps stage
+COPY --from=deps /app/node_modules ./node_modules
 
-# Copy the application source code
-COPY src/ ./src/
+# Copy app source (no node_modules or lock files thanks to .dockerignore)
+COPY . .
 
-# Expose the application port
+# Ensure data directory exists in container for sqlite
+RUN mkdir -p /data
+
+# Expose port configured by env (default 3000)
 EXPOSE 3000
 
-# The command to run the application
+# Start the server
 CMD ["node", "src/index.js"]

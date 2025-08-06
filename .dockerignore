@@ -1,0 +1,25 @@
+# Dependencies and lock files
+node_modules
+pnpm-lock.yaml
+yarn.lock
+package-lock.json
+
+# VCS
+.git
+.gitignore
+
+# Env / Secrets
+.env
+.env.*
+
+# Logs and caches
+logs
+*.log
+.cache
+.crawlee
+coverage
+dist
+build
+tmp
+data
+/data
