@@ -44,15 +44,19 @@ function buildTrackerSources() {
   const allowed = [];
   for (const t of trackers) {
     if (t.startsWith('udp://') || t.startsWith('http://') || t.startsWith('https://')) {
-      // Stremio expects tracker:<protocol>://<host>:<port>
-      // If https is present, Stremio supports http/udp; https is not documented, but we pass through http(s)
       const proto = t.startsWith('udp://') ? 'udp' : 'http';
-      // Keep original host:port path
       const rest = t.replace(/^udp:\/\//, '').replace(/^https?:\/\//, '');
       allowed.push(`tracker:${proto}://${rest}`);
     }
   }
   return allowed;
+}
+
+// Append DHT source with the infohash as the last entry.
+function withDhtSource(sources, infohash) {
+  const list = Array.isArray(sources) ? sources.slice() : [];
+  if (infohash) list.push(`dht:${infohash}`);
+  return list;
 }
 
 function dedupeStreams(streams) {
@@ -239,7 +243,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                 quality: parsed.quality,
                 language: parsed.language,
                 isRD: false,
-                sources: trackerSources
+                sources: withDhtSource(trackerSources, parsed.infohash)
               });
             } else {
               let epStr;
@@ -253,7 +257,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                 quality: parsed.quality,
                 language: parsed.language,
                 isRD: false,
-                sources: trackerSources
+                sources: withDhtSource(trackerSources, parsed.infohash)
               });
             }
           }
@@ -385,7 +389,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
               quality: s.quality,
               language: s.language,
               isRD: false,
-              sources: trackerSources
+              sources: withDhtSource(trackerSources, s.infohash)
             });
           }
         } else {
@@ -397,7 +401,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
               quality: s.quality,
               language: s.language,
               isRD: false,
-              sources: trackerSources
+              sources: withDhtSource(trackerSources, s.infohash)
             });
           }
         }
