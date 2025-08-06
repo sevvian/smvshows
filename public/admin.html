@@ -29,18 +29,24 @@
         .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 10px; }
         .status-item { padding: 10px; border: 1px solid #eee; border-radius: 6px; background: #fafafa; }
         .muted { color: #666; font-size: 0.9em; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; margin-left: 6px; }
+        .ok { background: #e6f4ea; color: #137333; }
+        .warn { background: #fef7e0; color: #a36f00; }
+        .danger { background: #fce8e6; color: #a50e0e; }
+        .row-actions { white-space: nowrap; }
+        .flex { display: flex; gap: 8px; align-items: center; }
+        .pagination { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Stremio Addon Admin Panel</h1>
 
-        <!-- New Status Section -->
         <div class="card">
             <h2>Status</h2>
             <div class="status-grid">
                 <div class="status-item"><strong>Workflow running:</strong> <span id="st-is-crawling">-</span></div>
-                <div class="status-item"><strong>Last workflow update:</strong> <span id="st-last-updated">-</span></div>
+                <div class="status-item"><strong>Last workflow update:</strong> <span id="st-last-updated">-</span> <span id="st-cache-age" class="badge">-</span></div>
                 <div class="status-item"><strong>RD enabled:</strong> <span id="st-rd">-</span></div>
                 <div class="status-item"><strong>TMDB configured:</strong> <span id="st-tmdb">-</span></div>
                 <div class="status-item"><strong>Tracker count:</strong> <span id="st-trackers">-</span></div>
@@ -49,7 +55,6 @@
             <p class="muted">Health endpoint provides a quick snapshot. Use the Actions below to trigger a manual crawl.</p>
         </div>
 
-        <!-- Dashboard & Actions Grid -->
         <div class="grid">
             <div class="card">
                 <h2>Dashboard</h2>
@@ -64,7 +69,6 @@
             </div>
         </div>
 
-        <!-- Edit/Rescue Section -->
         <h2 style="margin-top: 40px;">Edit & Rescue Pending Series</h2>
         <div class="grid">
             <div class="card">
@@ -83,7 +87,10 @@
                     <label for="custom-description">Custom Description:</label>
                     <textarea id="custom-description" rows="4" placeholder="A short description of the new series..."></textarea>
                     
-                    <button type="button" id="update-pending-btn" class="secondary">Save & Keep Pending</button>
+                    <div class="flex">
+                        <button type="button" id="update-pending-btn" class="secondary">Save & Keep Pending</button>
+                        <button type="button" id="rd-cache-btn" class="warning">Cache in RD</button>
+                    </div>
                     <hr>
 
                     <label for="manual-id">Link with Official IMDb ID (tt...) or TMDB ID (tv:...):</label>
@@ -94,7 +101,6 @@
             </div>
         </div>
 
-        <!-- Correction Section -->
         <h2 style="margin-top: 40px;">Correct a Mislinked Item</h2>
         <div class="card">
             <form id="correction-form">
@@ -110,9 +116,14 @@
             </form>
         </div>
 
-        <!-- Recent Activity -->
         <h2 style="margin-top: 40px;">Recent Activity</h2>
         <div class="card">
+            <div class="flex">
+                <strong>Linked (paginated):</strong>
+                <button id="rl-prev" class="secondary">Prev</button>
+                <span id="rl-page">1</span>
+                <button id="rl-next" class="secondary">Next</button>
+            </div>
             <table id="recent-table">
                 <thead>
                     <tr>
@@ -125,11 +136,10 @@
             </table>
         </div>
 
-        <!-- Failures Section -->
         <h2 style="margin-top: 40px;">Critical Parse Failures</h2>
         <div class="card">
             <table id="failures-table">
-                <thead><tr><th>Failed Title</th><th>Reason</th><th>Last Attempt</th></tr></thead>
+                <thead><tr><th>Failed Title</th><th>Reason</th><th>Last Attempt</th><th>Actions</th></tr></thead>
                 <tbody></tbody>
             </table>
         </div>
@@ -152,6 +162,7 @@ document.addEventListener('DOMContentLoaded', () => {
         customDescriptionInput: document.getElementById('custom-description'),
         manualIdInput: document.getElementById('manual-id'),
         updatePendingBtn: document.getElementById('update-pending-btn'),
+        rdCacheBtn: document.getElementById('rd-cache-btn'),
         linkOfficialBtn: document.getElementById('link-official-btn'),
         correctionForm: document.getElementById('correction-form'),
         currentImdbIdInput: document.getElementById('current-imdb-id'),
@@ -163,11 +174,16 @@ document.addEventListener('DOMContentLoaded', () => {
             rd: document.getElementById('st-rd'),
             tmdb: document.getElementById('st-tmdb'),
             trackers: document.getElementById('st-trackers'),
-            db: document.getElementById('st-db')
+            db: document.getElementById('st-db'),
+            cacheAge: document.getElementById('st-cache-age'),
         },
         recentTableBody: document.querySelector('#recent-table tbody'),
+        rlPrev: document.getElementById('rl-prev'),
+        rlNext: document.getElementById('rl-next'),
+        rlPage: document.getElementById('rl-page'),
     };
     let currentPendingData = [];
+    let rlState = { page: 1, limit: 15, total: 0 };
 
     const showStatus = (message, isError = false) => {
         ui.actionStatus.textContent = message;
@@ -192,7 +208,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         const data = await response.json();
         showStatus(data.message, !response.ok);
-        return response.ok;
+        return { ok: response.ok, data };
+    }
+
+    function msToBadge(ms) {
+        if (ms == null) return { text: '-', cls: 'warn' };
+        const mins = Math.round(ms / 60000);
+        if (mins <= 10) return { text: `${mins}m fresh`, cls: 'ok' };
+        if (mins <= 60) return { text: `${mins}m`, cls: 'warn' };
+        return { text: `${mins}m stale`, cls: 'danger' };
     }
 
     function renderHealth(health) {
@@ -203,6 +227,10 @@ document.addEventListener('DOMContentLoaded', () => {
         ui.status.tmdb.textContent = health.tmdbConfigured ? 'Yes' : 'No';
         ui.status.trackers.textContent = health.trackerCount ?? '-';
         ui.status.db.textContent = health.dbSizeBytes != null ? (Math.round(health.dbSizeBytes / 1024 / 1024 * 10) / 10) + ' MB' : '-';
+
+        const badge = msToBadge(health.cacheAges?.dashboardMs ?? null);
+        ui.status.cacheAge.textContent = badge.text;
+        ui.status.cacheAge.className = `badge ${badge.cls}`;
     }
 
     function renderRecent(recent) {
@@ -220,6 +248,21 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             ui.recentTableBody.innerHTML = rows.join('');
         }
+    }
+
+    function renderRecentLinkedPaginated(payload) {
+        if (!payload) return;
+        rlState.total = payload.total;
+        rlState.page = payload.page;
+        ui.rlPage.textContent = String(rlState.page);
+        // Prepend a header row for the paginated section
+        const head = `<tr><th colspan="3">Linked (page ${payload.page} of ${Math.max(1, Math.ceil(payload.total / rlState.limit))})</th></tr>`;
+        const rows = payload.items.map(item => 
+            `<tr><td>Linked</td><td>${item.title} (${item.type})</td><td>${new Date(item.updatedAt).toLocaleString()}</td></tr>`
+        ).join('');
+        // Keep failures from the simple recent call below; we just replace current linked rows area
+        // For simplicity, we re-render the entire recent table using this payload only:
+        ui.recentTableBody.innerHTML = head + rows;
     }
 
     async function loadAllData() {
@@ -255,89 +298,121 @@ document.addEventListener('DOMContentLoaded', () => {
         if (failures) {
             ui.failuresTableBody.innerHTML = '';
             if (failures.length === 0) {
-                ui.failuresTableBody.innerHTML = '<tr><td colspan="3">No critical failures found.</td></tr>';
+                ui.failuresTableBody.innerHTML = '<tr><td colspan="4">No critical failures found.</td></tr>';
             }
             failures.forEach(failure => {
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${failure.raw_title}</td>
-                    <td>${failure.reason}</td>
-                    <td>${new Date(failure.last_attempt).toLocaleString()}</td>
-                `;
-                ui.failuresTableBody.appendChild(row);
-            });
-        }
+                const row = document.createElement('Great — I’ll implement the improvements you approved and add tools for admins to manually cache magnets in RD, plus a paginated recent list. Here’s what I changed and why:
 
-        renderHealth(health);
-        renderRecent(recent);
-    }
+What changed
+- Database performance: Added indexes on hot columns to speed up catalogs and stream queries.
+- Admin API:
+  - Added retry-parse endpoint for failures.
+  - Added RD manual cache trigger for selected pending items (only if RD is enabled).
+  - Added paginated recent linked endpoint with page/limit.
+  - Health includes cache age to show staleness.
+- Admin UI:
+  - Shows cache “age” badge in Status.
+  - Adds “Cache in RD” button in Pending editor.
+  - Adds “Retry Parse” action per failure row.
+  - Recent Activity shows a paginated Linked list (Prev/Next).
+  
+Next steps
+- Click “Cache in RD” for any selected pending thread to push its magnets to RD.
+- Use Prev/Next in Recent Activity to browse linked items.
+- Use Retry on failures to clear their failure record so they’ll be retried on next crawl.
 
-    function selectPendingItem(threadId) {
-        const thread = currentPendingData.find(t => t.id === threadId);
-        if (!thread) return;
+Since your project already contained the needed files and there were no missing imports or extra dependencies, everything is wired with your current stack.
 
-        document.querySelectorAll('#pending-list li').forEach(li => {
-            li.classList.toggle('selected', li.dataset.threadId == threadId);
-        });
-        
-        ui.selectedTitle.textContent = thread.clean_title;
-        ui.threadIdInput.value = thread.id;
-        ui.customPosterInput.value = thread.custom_poster || '';
-        ui.customDescriptionInput.value = thread.custom_description || '';
-        ui.manualIdInput.value = '';
-    }
+Summary: Added DB indexes, admin actions (RD cache and retry parse), health cache age, and paginated linked list in Recent Activity for faster UX and better admin control. 
+<dyad-chat-summary>Improve admin UX: RD cache trigger, retry parse, health cache age, and paginated recent; add DB indexes for speed</dyad-chat-summary>Thanks for the clear direction. I’ll implement everything except the tracker-budget idea. Plan:
+- Add DB indexes for faster queries.
+- Add admin endpoints: retry-parse for failures, RD manual cache trigger for selected pending item, and paginated recent linked list.
+- Enhance admin UI: cache-age badge, Retry Parse button per failure, Cache in RD button for pending, and Prev/Next for linked recent.
 
-    ui.triggerCrawlBtn.onclick = async () => {
-        showStatus('Triggering crawl...');
-        await postData('/trigger-crawl', {});
-    };
+I will now update three files accordingly.
 
-    ui.updatePendingBtn.onclick = async () => {
-        const threadId = ui.threadIdInput.value;
-        if (!threadId) { alert('Please select a title first.'); return; }
-        const success = await postData('/update-pending', {
-            threadId: parseInt(threadId),
-            poster: ui.customPosterInput.value,
-            description: ui.customDescriptionInput.value
-        });
-        if (success) loadAllData();
-    };
+<dyad-write path="src/database/models.js" description="Add indexes to speed frequent queries on threads, streams, and tmdb metadata.">
+const { DataTypes } = require('sequelize');
 
-    ui.linkOfficialBtn.onclick = async () => {
-        const threadId = ui.threadIdInput.value;
-        const manualId = ui.manualIdInput.value;
-        if (!threadId || !manualId) { alert('Please select a title and enter an official ID.'); return; }
-        const success = await postData('/link-official', {
-            threadId: parseInt(threadId),
-            manualId
-        });
-        if (success) {
-            ui.selectedTitle.textContent = 'None';
-            ui.threadIdInput.value = '';
-            ui.customPosterInput.value = '';
-            ui.customDescriptionInput.value = '';
-            ui.manualIdInput.value = '';
-            loadAllData();
-        }
-    };
+module.exports = (sequelize) => {
+    const Thread = sequelize.define('Thread', {
+        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+        thread_hash: { type: DataTypes.STRING, unique: true, allowNull: false },
+        raw_title: { type: DataTypes.STRING, allowNull: false },
+        clean_title: DataTypes.STRING,
+        year: DataTypes.INTEGER,
+        tmdb_id: { type: DataTypes.STRING, references: { model: 'tmdb_metadata', key: 'tmdb_id' }, allowNull: true },
+        status: { type: DataTypes.STRING, defaultValue: 'linked', allowNull: false },
+        type: { type: DataTypes.STRING, allowNull: false, defaultValue: 'series' },
+        postedAt: { type: DataTypes.DATE, allowNull: true },
+        catalog: { type: DataTypes.STRING, allowNull: true },
+        magnet_uris: { type: DataTypes.JSON, allowNull: true },
+        custom_poster: { type: DataTypes.STRING, allowNull: true },
+        custom_description: { type: DataTypes.TEXT, allowNull: true },
+        last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    }, { 
+        tableName: 'threads', 
+        timestamps: true,
+        indexes: [
+            { fields: ['status'] },
+            { fields: ['type'] },
+            { fields: ['catalog'] },
+            { fields: ['postedAt'] },
+            { fields: ['tmdb_id'] },
+            { unique: true, fields: ['thread_hash'] },
+        ]
+    });
 
-    ui.correctLinkBtn.onclick = async () => {
-        const currentImdbId = ui.currentImdbIdInput.value;
-        const correctId = ui.correctIdInput.value;
-        if (!currentImdbId || !correctId) {
-            alert('Please fill in both the current incorrect ID and the new correct ID.');
-            return;
-        }
-        const success = await postData('/correct-link', { currentImdbId, correctId });
-        if (success) {
-            ui.currentImdbIdInput.value = '';
-            ui.correctIdInput.value = '';
-            loadAllData();
-        }
-    };
+    const TmdbMetadata = sequelize.define('TmdbMetadata', {
+        tmdb_id: { type: DataTypes.STRING, primaryKey: true },
+        imdb_id: { type: DataTypes.STRING, unique: true },
+        year: { type: DataTypes.INTEGER, index: true },
+        data: { type: DataTypes.JSON, allowNull: false },
+    }, { 
+        tableName: 'tmdb_metadata', 
+        timestamps: true,
+        indexes: [
+            { unique: true, fields: ['imdb_id'] },
+            { fields: ['year'] },
+        ]
+    });
+    
+    const Stream = sequelize.define('Stream', {
+        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+        tmdb_id: { type: DataTypes.STRING, allowNull: false },
+        season: { type: DataTypes.INTEGER, allowNull: true },
+        episode: { type: DataTypes.INTEGER, allowNull: true },
+        episode_end: { type: DataTypes.INTEGER, allowNull: true },
+        infohash: { type: DataTypes.STRING, allowNull: false, unique: true },
+        quality: DataTypes.STRING,
+        language: DataTypes.STRING,
+    }, { 
+        tableName: 'streams', 
+        timestamps: true,
+        indexes: [
+            { unique: true, fields: ['tmdb_id', 'season', 'episode', 'infohash'] },
+            { fields: ['tmdb_id'] },
+            { fields: ['season'] },
+            { fields: ['episode'] },
+            { fields: ['quality'] },
+        ]
+    });
 
-    loadAllData();
-});
-</script>
-</body>
-</html>
+    const RdTorrent = sequelize.define('RdTorrent', {
+        infohash: { type: DataTypes.STRING, primaryKey: true },
+        rd_id: { type: DataTypes.STRING, allowNull: false, unique: true },
+        status: { type: DataTypes.STRING, allowNull: false },
+        files: { type: DataTypes.JSON, allowNull: true },
+        links: { type: DataTypes.JSON, allowNull: true },
+        last_checked: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    }, { tableName: 'rd_torrents', timestamps: true });
+
+    const FailedThread = sequelize.define('FailedThread', {
+        thread_hash: { type: DataTypes.STRING, primaryKey: true },
+        raw_title: DataTypes.STRING,
+        reason: DataTypes.STRING,
+        last_attempt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    }, { tableName: 'failed_threads', timestamps: false, indexes: [{ fields: ['last_attempt'] }] });
+    
+    return { Thread, TmdbMetadata, Stream, FailedThread, RdTorrent };
+};

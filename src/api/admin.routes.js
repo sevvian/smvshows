@@ -9,6 +9,8 @@ const logger = require('../utils/logger');
 const fs = require('fs');
 const path = require('path');
 const config = require('../config/config');
+const rd = require('../services/realdebrid');
+const { Op } = require('sequelize');
 
 router.post('/trigger-crawl', (req, res) => {
     runFullWorkflow();
@@ -139,7 +141,6 @@ router.post('/link-official', async (req, res) => {
     }
 });
 
-// --- START OF FIX R10 ---
 router.post('/correct-link', async (req, res) => {
     const { currentImdbId, correctId } = req.body;
     if (!currentImdbId || !correctId) {
@@ -186,9 +187,7 @@ router.post('/correct-link', async (req, res) => {
         res.status(500).json({ message: 'An internal error occurred during the correction process.' });
     }
 });
-// --- END OF FIX R10 ---
 
-// --- NEW: HEALTH ENDPOINT ---
 router.get('/health', async (req, res) => {
     try {
         const cache = getDashboardCache();
@@ -197,9 +196,7 @@ router.get('/health', async (req, res) => {
         try {
             const stat = fs.statSync(dbPath);
             dbSizeBytes = stat.size;
-        } catch (e) {
-            // ignore if not found
-        }
+        } catch (e) {}
 
         const trackerCount = require('../services/tracker').getTrackers().length;
 
@@ -212,7 +209,10 @@ router.get('/health', async (req, res) => {
             realDebridEnabled: !!config.realDebridApiKey,
             tmdbConfigured: !!config.tmdbApiKey,
             trackerCount,
-            dbSizeBytes
+            dbSizeBytes,
+            cacheAges: {
+                dashboardMs: cache.lastUpdated ? (Date.now() - new Date(cache.lastUpdated).getTime()) : null
+            }
         });
     } catch (error) {
         logger.error(error, 'Failed to produce health summary');
@@ -220,7 +220,72 @@ router.get('/health', async (req, res) => {
     }
 });
 
-// --- NEW: RECENT ACTIVITY ENDPOINT ---
+// Paginated recent linked items
+router.get('/recent/linked', async (req, res) => {
+    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
+    const limit = Math.min(parseInt(req.query.limit || '15', 10), 100);
+    const offset = (page - 1) * limit;
+    try {
+        const { rows, count } = await models.Thread.findAndCountAll({
+            where: { status: 'linked' },
+            order: [['updatedAt', 'DESC']],
+            limit,
+            offset
+        });
+        res.json({
+            page,
+            limit,
+            total: count,
+            items: rows.map(t => ({
+                id: t.id, title: t.clean_title, type: t.type, postedAt: t.postedAt, updatedAt: t.updatedAt
+            }))
+        });
+    } catch (error) {
+        logger.error(error, 'Failed to fetch paginated linked recent list');
+        res.status(500).json({ message: 'Error fetching recent linked items' });
+    }
+});
+
+// Retry parse for a failed thread
+router.post('/retry-parse', async (req, res) => {
+    const { threadHash } = req.body;
+    if (!threadHash) return res.status(400).json({ message: 'threadHash is required.' });
+    try {
+        const failure = await models.FailedThread.findByPk(threadHash);
+        if (!failure) return res.status(404).json({ message: 'Failed thread not found.' });
+        await models.FailedThread.destroy({ where: { thread_hash: threadHash } });
+        res.json({ message: `Scheduled retry: removed failure record for "${failure.raw_title}".` });
+    } catch (error) {
+        logger.error(error, 'Retry-parse failed.');
+        res.status(500).json({ message: 'An internal error occurred while scheduling retry.' });
+    }
+});
+
+// RD manual cache trigger for a pending thread's magnets
+router.post('/rd-cache-pending', async (req, res) => {
+    if (!rd.isEnabled) return res.status(400).json({ message: 'Real-Debrid is not enabled.' });
+    const { threadId } = req.body;
+    if (!threadId) return res.status(400).json({ message: 'threadId is required.' });
+
+    try {
+        const thread = await models.Thread.findByPk(threadId);
+        if (!thread || thread.status !== 'pending_tmdb' || !Array.isArray(thread.magnet_uris) || thread.magnet_uris.length === 0) {
+            return res.status(404).json({ message: 'Pending thread with magnets not found.' });
+        }
+
+        let successCount = 0;
+        for (const magnet of thread.magnet_uris) {
+            const added = await rd.addAndSelect(magnet);
+            if (added && added.id) successCount++;
+        }
+        res.json({ message: `Triggered RD caching for ${successCount}/${thread.magnet_uris.length} magnet(s).` });
+    } catch (error) {
+        logger.error(error, 'RD manual cache trigger failed.');
+        res.status(500).json({ message: 'An internal error occurred while triggering RD cache.' });
+    }
+});
+
+// Existing recent endpoint (keep)
 router.get('/recent', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit || '15', 10), 50);
     try {
@@ -233,9 +298,7 @@ router.get('/recent', async (req, res) => {
             order: [['last_attempt', 'DESC']],
             limit
         });
-        // Placeholder for corrections: could be logged into a new table in future
         const corrections = []; 
-
         res.json({
             linked: recentLinked.map(t => ({
                 id: t.id, title: t.clean_title, type: t.type, postedAt: t.postedAt, updatedAt: t.updatedAt
