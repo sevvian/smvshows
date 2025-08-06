@@ -10,8 +10,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-      description: 'Optional custom image tag (e.g., v1.2.3) — overrides auto-tagging'
-      required: false
+        description: Optional custom image tag (e.g., v1.2.3) — overrides auto-tagging
+        required: false
 
 jobs:
   build-and-push:
