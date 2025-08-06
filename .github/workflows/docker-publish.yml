@@ -2,7 +2,8 @@ name: Build and Push Docker Image to GHCR
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - '**'
     tags:
       - 'v*'
       - 'release-*'
@@ -37,7 +38,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository_owner }}/smvshows
           tags: |
             # Tag with git tag name on tag pushes, e.g. v1.2.3
             type=ref,event=tag
@@ -57,3 +58,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
