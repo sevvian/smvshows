@@ -10,8 +10,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Optional custom image tag (e.g., v1.2.3) — overrides auto-tagging'
-        required: false
+      description: 'Optional custom image tag (e.g., v1.2.3) — overrides auto-tagging'
+      required: false
 
 jobs:
   build-and-push:
@@ -34,10 +34,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Prepare image name
+      - name: Compute image name
         id: imagename
         run: |
           echo "IMAGE=ghcr.io/${{ github.repository_owner }}/smvshows" >> $GITHUB_OUTPUT
+          echo "LATEST=${{ github.ref == 'refs/heads/main' && 'true' || 'false' }}" >> $GITHUB_OUTPUT
 
       - name: Extract Docker metadata (tags, labels)
         id: meta
@@ -59,6 +60,7 @@ jobs:
           push: true
           tags: |
             ${{ steps.meta.outputs.tags }}
+            ${{ steps.imagename.outputs.IMAGE }}:sha-${{ github.sha }}
             ${{ steps.imagename.outputs.IMAGE }}:latest
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
