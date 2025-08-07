@@ -35,15 +35,7 @@
     .danger { background: #fce8e6; color: #a50e0e; }
     .row-actions { white-space: nowrap; }
     .flex { display: flex; gap: 8px; align-items: center; }
-    .pill { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 0.8em; }
-    .pill.locked { background: #fff3cd; color: #7a5c00; }
-    .streams-box { max-height: 260px; overflow-y: auto; border: 1px solid #eee; border-radius: 6px; padding: 8px; }
-    .streams-row { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-bottom: 1px solid #f0f0f0; }
-    .streams-row:last-child { border-bottom: none; }
-    .streams-row.locked { background: #fffdf2; }
-    .streams-row.selected { outline: 2px solid #007bff; background: #f0f8ff; }
-    .rd-list { list-style: none; padding-left: 0; max-height: 260px; overflow-y: auto; }
-    .rd-list li { padding: 6px 8px; border-bottom: 1px solid #eee; }
+    .pagination { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
   </style>
 </head>
 <body>
@@ -77,7 +69,7 @@
       </div>
     </div>
 
-    <h2 style="margin-top: 40px;">Edit & Rescue Pending Series</h2>
+    <h2 style="margin-top: 40px;">Edit & Rescue Pending Items</h2>
     <div class="grid">
       <div class="card">
         <h3>1. Select a Pending Title</h3>
@@ -93,31 +85,19 @@
           <input type="url" id="custom-poster" placeholder="https://i.imgur.com/poster.png">
           
           <label for="custom-description">Custom Description:</label>
-          <textarea id="custom-description" rows="4" placeholder="A short description of the new series..."></textarea>
+          <textarea id="custom-description" rows="4" placeholder="A short description..."></textarea>
           
           <div class="flex">
             <button type="button" id="update-pending-btn" class="secondary">Save & Keep Pending</button>
-            <button type="button" id="rd-cache-btn" class="warning">Cache Selected in RD</button>
+            <button type="button" id="rd-cache-btn" class="warning">Cache in RD</button>
           </div>
           <hr>
 
-          <label for="manual-id">Link with Official IMDb ID (tt...) or TMDB ID (tv:...):</label>
+          <label for="manual-id">Link with Official IMDb ID (tt...) or TMDB ID (tv:... or movie:...):</label>
           <input type="text" id="manual-id" placeholder="e.g., tt8111088 or tv:94997">
           
           <button type="button" id="link-official-btn">Link Official ID</button>
         </form>
-      </div>
-    </div>
-
-    <div class="grid" style="margin-top: 20px;">
-      <div class="card">
-        <h3>3. Streams for Selected Pending Item</h3>
-        <div id="streams-box" class="streams-box"></div>
-      </div>
-      <div class="card">
-        <h3>RD Cache Initiated</h3>
-        <ul id="rd-initiated-list" class="rd-list"></ul>
-        <p class="muted">Items listed here have at least one stream already sent to RD cache.</p>
       </div>
     </div>
 
@@ -127,7 +107,7 @@
         <p>This tool re-links a Thread and its Streams from an incorrect IMDb ID to the correct one.</p>
         
         <label for="current-imdb-id">Current (Incorrect) IMDb ID:</label>
-        <input type="text" id="current-imdb-id" placeholder="e.g., tt1234567 (the wrong movie)">
+        <input type="text" id="current-imdb-id" placeholder="e.g., tt1234567">
 
         <label for="correct-id">New (Correct) IMDb or TMDB ID:</label>
         <input type="text" id="correct-id" placeholder="e.g., tt7654321 or movie:12345">
@@ -167,7 +147,7 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-  const apiBase = '/admin/api'; 
+  const apiBase = '/admin/api';
   const ui = {
     totalLinked: document.getElementById('total-linked'),
     totalPending: document.getElementById('total-pending'),
@@ -184,6 +164,9 @@ document.addEventListener('DOMContentLoaded', () => {
     updatePendingBtn: document.getElementById('update-pending-btn'),
     rdCacheBtn: document.getElementById('rd-cache-btn'),
     linkOfficialBtn: document.getElementById('link-official-btn'),
+    currentImdbIdInput: document.getElementById('current-imdb-id'),
+    correctIdInput: document.getElementById('correct-id'),
+    correctLinkBtn: document.getElementById('correct-link-btn'),
     status: {
       isCrawling: document.getElementById('st-is-crawling'),
       lastUpdated: document.getElementById('st-last-updated'),
@@ -197,119 +180,229 @@ document.addEventListener('DOMContentLoaded', () => {
     rlPrev: document.getElementById('rl-prev'),
     rlNext: document.getElementById('rl-next'),
     rlPage: document.getElementById('rl-page'),
-    streamsBox: document.getElementById('streams-box'),
-    rdInitiatedList: document.getElementById('rd-initiated-list'),
   };
 
   let currentPendingData = [];
   let rlState = { page: 1, limit: 15, total: 0 };
-  let currentStreams = { items: [], locked: [] };
-  let selectedInfohash = null;
-  let rdInitiatedThreads = new Set();
 
-  const showStatus = (message, isError = false) => {
+  function showStatus(message, isError = false) {
     ui.actionStatus.textContent = message || '';
     ui.actionStatus.style.color = isError ? 'red' : 'green';
-    if (message) setTimeout(() => ui.actionStatus.textContent = '', 7000);
-  };
+    if (message) setTimeout(() => (ui.actionStatus.textContent = ''), 7000);
+  }
 
   async function fetchData(endpoint) {
-    const res = await fetch(`${apiBase}${endpoint}`).catch(()Great idea — we’ll add UI feedback for RD caching (stream selection, lock badges, initiated list) and enforce a backend lock so the same infohash can’t be sent twice.
+    try {
+      const res = await fetch(`${apiBase}${endpoint}`);
+      if (!res.ok) {
+        showStatus(`Failed to fetch ${endpoint}`, true);
+        return null;
+      }
+      return await res.json();
+    } catch (_) {
+      showStatus(`Error fetching ${endpoint}`, true);
+      return null;
+    }
+  }
 
-What will change
-- Backend: add a small RdCacheLock table, expose a streams endpoint for a pending thread, and update rd-cache-pending to accept a single infohash and skip duplicates.
-- Admin UI: when selecting a pending item, show its streams (quality/language/episode), allow choosing one, send only that infohash for RD, mark locked streams, and list items with RD initiated.
+  async function postData(endpoint, body) {
+    try {
+      const res = await fetch(`${apiBase}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+      });
+      const json = await res.json().catch(() => ({}));
+      showStatus(json.message || (res.ok ? 'Success' : 'Failed'), !res.ok);
+      return { ok: res.ok, data: json };
+    } catch (_) {
+      showStatus(`Error posting ${endpoint}`, true);
+      return { ok: false, data: null };
+    }
+  }
 
-I’ll make the minimal, focused changes now.
+  function msToBadge(ms) {
+    if (ms == null) return { text: '-', cls: 'warn' };
+    const mins = Math.round(ms / 60000);
+    if (mins <= 10) return { text: `${mins}m fresh`, cls: 'ok' };
+    if (mins <= 60) return { text: `${mins}m`, cls: 'warn' };
+    return { text: `${mins}m stale`, cls: 'danger' };
+  }
 
-<dyad-write path="src/database/models.js" description="Add RdCacheLock model to prevent duplicate RD cache requests.">
-const { DataTypes } = require('sequelize');
+  function renderHealth(h) {
+    if (!h) return;
+    ui.status.isCrawling.textContent = h.isCrawling ? 'Yes' : 'No';
+    ui.status.lastUpdated.textContent = h.lastUpdated ? new Date(h.lastUpdated).toLocaleString() : '-';
+    ui.status.rd.textContent = h.realDebridEnabled ? 'Yes' : 'No';
+    ui.status.tmdb.textContent = h.tmdbConfigured ? 'Yes' : 'No';
+    ui.status.trackers.textContent = h.trackerCount ?? '-';
+    ui.status.db.textContent = h.dbSizeBytes != null ? (Math.round(h.dbSizeBytes / 1024 / 1024 * 10) / 10) + ' MB' : '-';
+    const badge = msToBadge(h.cacheAges?.dashboardMs ?? null);
+    ui.status.cacheAge.textContent = badge.text;
+    ui.status.cacheAge.className = `badge ${badge.cls}`;
+  }
 
-module.exports = (sequelize) => {
-    const Thread = sequelize.define('Thread', {
-        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-        thread_hash: { type: DataTypes.STRING, unique: true, allowNull: false },
-        raw_title: { type: DataTypes.STRING, allowNull: false },
-        clean_title: DataTypes.STRING,
-        year: DataTypes.INTEGER,
-        tmdb_id: { type: DataTypes.STRING, references: { model: 'tmdb_metadata', key: 'tmdb_id' }, allowNull: true },
-        status: { type: DataTypes.STRING, defaultValue: 'linked', allowNull: false },
-        type: { type: DataTypes.STRING, allowNull: false, defaultValue: 'series' },
-        postedAt: { type: DataTypes.DATE, allowNull: true },
-        catalog: { type: DataTypes.STRING, allowNull: true },
-        magnet_uris: { type: DataTypes.JSON, allowNull: true },
-        custom_poster: { type: DataTypes.STRING, allowNull: true },
-        custom_description: { type: DataTypes.TEXT, allowNull: true },
-        last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { 
-        tableName: 'threads', 
-        timestamps: true,
-        indexes: [
-            { fields: ['status'] },
-            { fields: ['type'] },
-            { fields: ['catalog'] },
-            { fields: ['postedAt'] },
-            { fields: ['tmdb_id'] },
-            { unique: true, fields: ['thread_hash'] },
-        ]
+  function renderRecent(recent) {
+    if (!recent) return;
+    const rows = [];
+    recent.linked.forEach(item => {
+      rows.push(`<tr><td>Linked</td><td>${item.title} (${item.type})</td><td>${new Date(item.updatedAt).toLocaleString()}</td></tr>`);
     });
-
-    const TmdbMetadata = sequelize.define('TmdbMetadata', {
-        tmdb_id: { type: DataTypes.STRING, primaryKey: true },
-        imdb_id: { type: DataTypes.STRING, unique: true },
-        year: { type: DataTypes.INTEGER, index: true },
-        data: { type: DataTypes.JSON, allowNull: false },
-    }, { 
-        tableName: 'tmdb_metadata', 
-        timestamps: true,
-        indexes: [
-            { unique: true, fields: ['imdb_id'] },
-            { fields: ['year'] },
-        ]
+    recent.failures.forEach(item => {
+      rows.push(`<tr><td>Failed</td><td>${item.title} — ${item.reason}</td><td>${new Date(item.last_attempt).toLocaleString()}</td></tr>`);
     });
-    
-    const Stream = sequelize.define('Stream', {
-        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-        tmdb_id: { type: DataTypes.STRING, allowNull: false },
-        season: { type: DataTypes.INTEGER, allowNull: true },
-        episode: { type: DataTypes.INTEGER, allowNull: true },
-        episode_end: { type: DataTypes.INTEGER, allowNull: true },
-        infohash: { type: DataTypes.STRING, allowNull: false, unique: true },
-        quality: DataTypes.STRING,
-        language: DataTypes.STRING,
-    }, { 
-        tableName: 'streams', 
-        timestamps: true,
-        indexes: [
-            { unique: true, fields: ['tmdb_id', 'season', 'episode', 'infohash'] },
-            { fields: ['tmdb_id'] },
-            { fields: ['season'] },
-            { fields: ['episode'] },
-            { fields: ['quality'] },
-        ]
+    ui.recentTableBody.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="3">No recent activity.</td></tr>';
+  }
+
+  function renderRecentLinkedPaginated(payload) {
+    if (!payload) return;
+    rlState.total = payload.total;
+    rlState.page = payload.page;
+    ui.rlPage.textContent = String(rlState.page);
+    const rows = payload.items.map(i => `<tr><td>Linked</td><td>${i.title} (${i.type})</td><td>${new Date(i.updatedAt).toLocaleString()}</td></tr>`).join('');
+    ui.recentTableBody.innerHTML = rows || '<tr><td colspan="3">No items.</td></tr>';
+  }
+
+  function selectPendingItem(threadId) {
+    document.querySelectorAll('#pending-list li').forEach(li => {
+      li.classList.toggle('selected', li.dataset.threadId === String(threadId));
     });
+    const item = currentPendingData.find(x => String(x.id) === String(threadId));
+    if (!item) return;
+    ui.selectedTitle.textContent = `${item.clean_title}${item.year ? ' (' + item.year + ')' : ''}`;
+    ui.threadIdInput.value = item.id;
+    ui.customPosterInput.value = item.custom_poster || '';
+    ui.customDescriptionInput.value = item.custom_description || '';
+  }
 
-    const RdTorrent = sequelize.define('RdTorrent', {
-        infohash: { type: DataTypes.STRING, primaryKey: true },
-        rd_id: { type: DataTypes.STRING, allowNull: false, unique: true },
-        status: { type: DataTypes.STRING, allowNull: false },
-        files: { type: DataTypes.JSON, allowNull: true },
-        links: { type: DataTypes.JSON, allowNull: true },
-        last_checked: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { tableName: 'rd_torrents', timestamps: true });
+  async function loadAllData() {
+    const [dashboard, pending, failures, health, recent] = await Promise.all([
+      fetchData('/dashboard'),
+      fetchData('/pending'),
+      fetchData('/failures'),
+      fetchData('/health'),
+      fetchData('/recent?limit=15')
+    ]);
 
-    const FailedThread = sequelize.define('FailedThread', {
-        thread_hash: { type: DataTypes.STRING, primaryKey: true },
-        raw_title: DataTypes.STRING,
-        reason: DataTypes.STRING,
-        last_attempt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { tableName: 'failed_threads', timestamps: false, indexes: [{ fields: ['last_attempt'] }] });
-    
-    // NEW: lock table to prevent sending the same infohash to RD multiple times
-    const RdCacheLock = sequelize.define('RdCacheLock', {
-        infohash: { type: DataTypes.STRING, primaryKey: true },
-        createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { tableName: 'rd_cache_locks', timestamps: false });
+    if (dashboard) {
+      ui.totalLinked.textContent = dashboard.linked;
+      ui.totalPending.textContent = dashboard.pending;
+      ui.totalFailed.textContent = dashboard.failed;
+    }
 
-    return { Thread, TmdbMetadata, Stream, FailedThread, RdTorrent, RdCacheLock };
-};
+    if (pending) {
+      currentPendingData = pending;
+      ui.pendingList.innerHTML = '';
+      if (pending.length === 0) {
+        ui.pendingList.innerHTML = '<li>No pending items.</li>';
+      } else {
+        pending.forEach(thread => {
+          const li = document.createElement('li');
+          li.textContent = `${thread.clean_title}${thread.year ? ' (' + thread.year + ')' : ''}`;
+          li.dataset.threadId = thread.id;
+          li.addEventListener('click', () => selectPendingItem(thread.id));
+          ui.pendingList.appendChild(li);
+        });
+      }
+    }
+
+    if (failures) {
+      ui.failuresTableBody.innerHTML = '';
+      if (failures.length === 0) {
+        ui.failuresTableBody.innerHTML = '<tr><td colspan="4">No critical failures found.</td></tr>';
+      } else {
+        failures.forEach(f => {
+          const tr = document.createElement('tr');
+          const tdTitle = document.createElement('td');
+          const tdReason = document.createElement('td');
+          const tdWhen = document.createElement('td');
+          const tdActions = document.createElement('td');
+
+          tdTitle.textContent = f.raw_title || '-';
+          tdReason.textContent = f.reason || '-';
+          tdWhen.textContent = f.last_attempt ? new Date(f.last_attempt).toLocaleString() : '-';
+          tdActions.className = 'row-actions';
+
+          const retryBtn = document.createElement('button');
+          retryBtn.className = 'secondary';
+          retryBtn.textContent = 'Retry';
+          retryBtn.addEventListener('click', async () => {
+            await postData('/retry-parse', { threadHash: f.thread_hash });
+            loadAllData();
+          });
+
+          tdActions.appendChild(retryBtn);
+          tr.appendChild(tdTitle);
+          tr.appendChild(tdReason);
+          tr.appendChild(tdWhen);
+          tr.appendChild(tdActions);
+          ui.failuresTableBody.appendChild(tr);
+        });
+      }
+    }
+
+    renderHealth(health);
+    renderRecent(recent);
+  }
+
+  // Wire actions
+  ui.triggerCrawlBtn.addEventListener('click', async () => {
+    await postData('/trigger-crawl', {});
+  });
+
+  ui.updatePendingBtn.addEventListener('click', async () => {
+    const threadId = ui.threadIdInput.value;
+    if (!threadId) return showStatus('Select a pending item first.', true);
+    await postData('/update-pending', {
+      threadId,
+      poster: ui.customPosterInput.value || null,
+      description: ui.customDescriptionInput.value || null
+    });
+    loadAllData();
+  });
+
+  ui.rdCacheBtn.addEventListener('click', async () => {
+    const threadId = ui.threadIdInput.value;
+    if (!threadId) return showStatus('Select a pending item first.', true);
+    await postData('/rd-cache-pending', { threadId });
+  });
+
+  ui.linkOfficialBtn.addEventListener('click', async () => {
+    const threadId = ui.threadIdInput.value;
+    const manualId = ui.manualIdInput.value.trim();
+    if (!threadId || !manualId) return showStatus('Select a pending item and enter an ID.', true);
+    const res = await postData('/link-official', { threadId, manualId });
+    if (res.ok) {
+      ui.manualIdInput.value = '';
+      loadAllData();
+    }
+  });
+
+  ui.correctLinkBtn.addEventListener('click', async () => {
+    const currentImdbId = ui.currentImdbIdInput.value.trim();
+    const correctId = ui.correctIdInput.value.trim();
+    if (!currentImdbId || !correctId) return showStatus('Provide both current IMDb and new ID.', true);
+    await postData('/correct-link', { currentImdbId, correctId });
+    loadAllData();
+  });
+
+  ui.rlPrev.addEventListener('click', async () => {
+    if (rlState.page <= 1) return;
+    const page = rlState.page - 1;
+    const payload = await fetchData(`/recent/linked?page=${page}&limit=${rlState.limit}`);
+    renderRecentLinkedPaginated(payload);
+  });
+
+  ui.rlNext.addEventListener('click', async () => {
+    const max = Math.max(1, Math.ceil(rlState.total / rlState.limit));
+    if (rlState.page >= max) return;
+    const page = rlState.page + 1;
+    const payload = await fetchData(`/recent/linked?page=${page}&limit=${rlState.limit}`);
+    renderRecentLinkedPaginated(payload);
+  });
+
+  loadAllData();
+});
+</script>
+</body>
+</html>
