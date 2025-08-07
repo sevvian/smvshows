@@ -353,39 +353,88 @@ router.post('/rd-cache-pending', async (req, res) => {
       return res.status(404).json({ message: 'Pending thread with magnets not found.' });
     }
 
-    // Build parsed list, optionally filter by single infohash
+    // Parse magnets and filter by requested infohash (on-demand)
     const parsed = [];
     for (const magnet of thread.magnet_uris) {
       const p = parser.parseMagnet(magnet, thread.type);
-      if (p) parsed.push(p);
+      if (p) parsed.push({ ...p, magnet });
     }
     const targets = infohash ? parsed.filter(p => p.infohash === infohash) : parsed;
-
     if (targets.length === 0) return res.status(404).json({ message: 'No matching streams to cache.' });
 
-    let success = 0;
+    let lockedCount = 0;
+    let newlyAdded = 0;
+
     for (const item of targets) {
-      // lock to prevent duplicates
-      const existing = await models.RdCacheLock.findByPk(item.infohash);
-      if (existing) {
-        logger.info({ infohash: item.infohash }, 'RD cache already initiated; skipping duplicate.');
+      // 1) Local lock prevents duplicates
+      const existingLock = await models.RdCacheLock.findByPk(item.infohash);
+      if (existingLock) {
+        logger.info({ infohash: item.infohash }, 'RD cache already initiated (local lock).');
         continue;
       }
-      // Upsert lock first
-      await models.RdCacheLock.upsert({ infohash: item.infohash, createdAt: new Date() });
-      const magnet = thread.magnet_uris.find(m => (m || '').toLowerCase().includes(item.infohash));
-      const resp = await rd.addAndSelect(magnet || '');
-      if (resp && resp.id) success++;
+
+      // 2) Probe Real-Debrid for existing torrent by using addMagnet (RD deduplicates and returns existing id)
+      let rdId = null;
+      try {
+        const addResp = await rd.addMagnet(item.magnet);
+        rdId = addResp?.id || null;
+      } catch (e) {
+        // If RD rejects in a way that indicates already exists, we still try to continue without failing the whole loop
+        logger.warn({ infohash: item.infohash, err: e?.message }, 'RD addMagnet probe returned error; will proceed conservatively.');
+      }
+
+      if (rdId) {
+        // We have an RD torrent id (either existing or newly created). Fetch info and persist
+        try {
+          const info = await rd.getTorrentInfo(rdId);
+          // Persist RdTorrent snapshot
+          await models.RdTorrent.upsert({
+            infohash: item.infohash,
+            rd_id: rdId,
+            status: info?.status || 'unknown',
+            files: info?.files || null,
+            links: info?.links || null,
+            last_checked: new Date()
+          });
+          // Lock it locally
+          await models.RdCacheLock.upsert({ infohash: item.infohash, createdAt: new Date() });
+          lockedCount++;
+          // If we just created a brand-new torrent, select files; if it already existed, selectFiles will no-op or 202
+          try { await rd.selectFiles(rdId, 'all'); newlyAdded++; } catch (_) {}
+          continue;
+        } catch (e) {
+          logger.warn({ infohash: item.infohash, rdId, err: e?.message }, 'Failed to fetch RD torrent info after addMagnet probe.');
+          // Fall through to try normal add below only if we have clear signal we didn't create anything
+        }
+      }
+
+      // 3) If no rdId discovered by probe, proceed with add-and-select as a true add path
+      const resp = await rd.addAndSelect(item.magnet);
+      if (resp && resp.id) {
+        // Persist RdTorrent snapshot
+        await models.RdTorrent.upsert({
+          infohash: item.infohash,
+          rd_id: resp.id,
+          status: resp?.status || 'unknown',
+          files: resp?.files || null,
+          links: resp?.links || null,
+          last_checked: new Date()
+        });
+        // Lock locally
+        await models.RdCacheLock.upsert({ infohash: item.infohash, createdAt: new Date() });
+        lockedCount++;
+        newlyAdded++;
+      }
     }
 
-    res.json({ message: `RD caching triggered for ${success}/${targets.length} selected stream(s).` });
+    res.json({ message: `RD caching ensured for ${lockedCount}/${targets.length} stream(s). Newly added: ${newlyAdded}.` });
   } catch (error) {
     logger.error(error, 'rd-cache-pending failed');
     res.status(500).json({ message: 'Error triggering RD cache.' });
   }
 });
 
-// NEW: Check if a torrent exists on RD by infohash and sync local DB/locks (now pure lookup; no RD add)
+// NEW: Check if a torrent exists on RD by infohash and sync local DB/locks (pure local check; no remote add)
 router.post('/rd-check', async (req, res) => {
   if (!rd.isEnabled) return res.status(400).json({ message: 'Real-Debrid is not enabled.' });
   const { infohash } = req.body || {};
@@ -405,7 +454,7 @@ router.post('/rd-check', async (req, res) => {
       return res.json({ found: true, updatedLocal: true });
     }
 
-    // No remote call here to avoid creating duplicates due to lack of RD search by hash
+    // No remote call here to avoid creating duplicates during check
     return res.json({ found: false, updatedLocal: false });
   } catch (error) {
     logger.error(error, 'rd-check failed');
