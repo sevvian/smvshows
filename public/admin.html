@@ -40,7 +40,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Stremio Addon Admin Panel</h1>
+        <h1>Stremio Addon Admin</h1>
 
         <div class="card">
             <h2>Status</h2>
@@ -186,29 +186,39 @@ document.addEventListener('DOMContentLoaded', () => {
     let rlState = { page: 1, limit: 15, total: 0 };
 
     const showStatus = (message, isError = false) => {
-        ui.actionStatus.textContent = message;
+        ui.actionStatus.textContent = message || '';
         ui.actionStatus.style.color = isError ? 'red' : 'green';
-        setTimeout(() => ui.actionStatus.textContent = '', 7000);
+        if (message) setTimeout(() => ui.actionStatus.textContent = '', 7000);
     };
 
     async function fetchData(endpoint) {
-        const response = await fetch(`${apiBase}${endpoint}`);
-        if (!response.ok) {
-            showStatus(`Failed to fetch ${endpoint}`, true);
+        try {
+            const response = await fetch(`${apiBase}${endpoint}`);
+            if (!response.ok) {
+                showStatus(`Failed to fetch ${endpoint}`, true);
+                return null;
+            }
+            return await response.json();
+        } catch (e) {
+            showStatus(`Error fetching ${endpoint}`, true);
             return null;
         }
-        return response.json();
     }
 
     async function postData(endpoint, body) {
-        const response = await fetch(`${apiBase}${endpoint}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        const data = await response.json();
-        showStatus(data.message, !response.ok);
-        return { ok: response.ok, data };
+        try {
+            const response = await fetch(`${apiBase}${endpoint}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body || {})
+            });
+            const data = await response.json().catch(() => ({}));
+            showStatus(data.message || (response.ok ? 'Success' : 'Failed'), !response.ok);
+            return { ok: response.ok, data };
+        } catch (e) {
+            showStatus(`Error posting ${endpoint}`, true);
+            return { ok: false, data: null };
+        }
     }
 
     function msToBadge(ms) {
@@ -255,14 +265,22 @@ document.addEventListener('DOMContentLoaded', () => {
         rlState.total = payload.total;
         rlState.page = payload.page;
         ui.rlPage.textContent = String(rlState.page);
-        // Prepend a header row for the paginated section
         const head = `<tr><th colspan="3">Linked (page ${payload.page} of ${Math.max(1, Math.ceil(payload.total / rlState.limit))})</th></tr>`;
         const rows = payload.items.map(item => 
             `<tr><td>Linked</td><td>${item.title} (${item.type})</td><td>${new Date(item.updatedAt).toLocaleString()}</td></tr>`
         ).join('');
-        // Keep failures from the simple recent call below; we just replace current linked rows area
-        // For simplicity, we re-render the entire recent table using this payload only:
         ui.recentTableBody.innerHTML = head + rows;
+    }
+
+    function selectPendingItem(threadId) {
+        const liNodes = ui.pendingList.querySelectorAll('li');
+        liNodes.forEach(li => li.classList.toggle('selected', li.dataset.threadId === String(threadId)));
+        const item = currentPendingData.find(x => String(x.id) === String(threadId));
+        if (!item) return;
+        ui.selectedTitle.textContent = `${item.clean_title}${item.year ? ' (' + item.year + ')' : ''}`;
+        ui.threadIdInput.value = item.id;
+        ui.customPosterInput.value = item.custom_poster || '';
+        ui.customDescriptionInput.value = item.custom_description || '';
     }
 
     async function loadAllData() {
@@ -285,134 +303,102 @@ document.addEventListener('DOMContentLoaded', () => {
             ui.pendingList.innerHTML = '';
             if (pending.length === 0) {
                 ui.pendingList.innerHTML = '<li>No pending series. Good job!</li>';
+            } else {
+                pending.forEach(thread => {
+                    const li = document.createElement('li');
+                    li.textContent = `${thread.clean_title} (${thread.year || 'N/A'})`;
+                    li.dataset.threadId = thread.id;
+                    li.onclick = () => selectPendingItem(thread.id);
+                    ui.pendingList.appendChild(li);
+                });
             }
-            pending.forEach(thread => {
-                const li = document.createElement('li');
-                li.textContent = `${thread.clean_title} (${thread.year || 'N/A'})`;
-                li.dataset.threadId = thread.id;
-                li.onclick = () => selectPendingItem(thread.id);
-                ui.pendingList.appendChild(li);
-            });
         }
         
         if (failures) {
             ui.failuresTableBody.innerHTML = '';
             if (failures.length === 0) {
                 ui.failuresTableBody.innerHTML = '<tr><td colspan="4">No critical failures found.</td></tr>';
+            } else {
+                failures.forEach(failure => {
+                    const tr = document.createElement('tr');
+                    const tdTitle = document.createElement('td');
+                    const tdReason = document.createElement('td');
+                    const tdWhen = document.createElement('td');
+                    const tdActions = document.createElement('td');
+                    tdTitle.textContent = failure.raw_title || '-';
+                    tdReason.textContent = failure.reason || '-';
+                    tdWhen.textContent = failure.last_attempt ? new Date(failure.last_attempt).toLocaleString() : '-';
+                    tdActions.className = 'row-actions';
+                    const retryBtn = document.createElement('button');
+                    retryBtn.className = 'secondary';
+                    retryBtn.textContent = 'Retry';
+                    retryBtn.onclick = async () => {
+                        await postData('/retry-parse', { threadHash: failure.thread_hash });
+                        loadAllData();
+                    };
+                    tdActions.appendChild(retryBtn);
+                    tr.appendChild(tdTitle);
+                    tr.appendChild(tdReason);
+                    tr.appendChild(tdWhen);
+                    tr.appendChild(tdActions);
+                    ui.failuresTableBody.appendChild(tr);
+                });
             }
-            failures.forEach(failure => {
-                const row = document.createElement('Great — I’ll implement the improvements you approved and add tools for admins to manually cache magnets in RD, plus a paginated recent list. Here’s what I changed and why:
+        }
 
-What changed
-- Database performance: Added indexes on hot columns to speed up catalogs and stream queries.
-- Admin API:
-  - Added retry-parse endpoint for failures.
-  - Added RD manual cache trigger for selected pending items (only if RD is enabled).
-  - Added paginated recent linked endpoint with page/limit.
-  - Health includes cache age to show staleness.
-- Admin UI:
-  - Shows cache “age” badge in Status.
-  - Adds “Cache in RD” button in Pending editor.
-  - Adds “Retry Parse” action per failure row.
-  - Recent Activity shows a paginated Linked list (Prev/Next).
-  
-Next steps
-- Click “Cache in RD” for any selected pending thread to push its magnets to RD.
-- Use Prev/Next in Recent Activity to browse linked items.
-- Use Retry on failures to clear their failure record so they’ll be retried on next crawl.
+        renderHealth(health);
+        renderRecent(recent);
+    }
 
-Since your project already contained the needed files and there were no missing imports or extra dependencies, everything is wired with your current stack.
-
-Summary: Added DB indexes, admin actions (RD cache and retry parse), health cache age, and paginated linked list in Recent Activity for faster UX and better admin control. 
-<dyad-chat-summary>Improve admin UX: RD cache trigger, retry parse, health cache age, and paginated recent; add DB indexes for speed</dyad-chat-summary>Thanks for the clear direction. I’ll implement everything except the tracker-budget idea. Plan:
-- Add DB indexes for faster queries.
-- Add admin endpoints: retry-parse for failures, RD manual cache trigger for selected pending item, and paginated recent linked list.
-- Enhance admin UI: cache-age badge, Retry Parse button per failure, Cache in RD button for pending, and Prev/Next for linked recent.
-
-I will now update three files accordingly.
-
-<dyad-write path="src/database/models.js" description="Add indexes to speed frequent queries on threads, streams, and tmdb metadata.">
-const { DataTypes } = require('sequelize');
-
-module.exports = (sequelize) => {
-    const Thread = sequelize.define('Thread', {
-        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-        thread_hash: { type: DataTypes.STRING, unique: true, allowNull: false },
-        raw_title: { type: DataTypes.STRING, allowNull: false },
-        clean_title: DataTypes.STRING,
-        year: DataTypes.INTEGER,
-        tmdb_id: { type: DataTypes.STRING, references: { model: 'tmdb_metadata', key: 'tmdb_id' }, allowNull: true },
-        status: { type: DataTypes.STRING, defaultValue: 'linked', allowNull: false },
-        type: { type: DataTypes.STRING, allowNull: false, defaultValue: 'series' },
-        postedAt: { type: DataTypes.DATE, allowNull: true },
-        catalog: { type: DataTypes.STRING, allowNull: true },
-        magnet_uris: { type: DataTypes.JSON, allowNull: true },
-        custom_poster: { type: DataTypes.STRING, allowNull: true },
-        custom_description: { type: DataTypes.TEXT, allowNull: true },
-        last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { 
-        tableName: 'threads', 
-        timestamps: true,
-        indexes: [
-            { fields: ['status'] },
-            { fields: ['type'] },
-            { fields: ['catalog'] },
-            { fields: ['postedAt'] },
-            { fields: ['tmdb_id'] },
-            { unique: true, fields: ['thread_hash'] },
-        ]
+    // Button handlers
+    ui.triggerCrawlBtn.addEventListener('click', async () => {
+        await postData('/trigger-crawl', {});
     });
 
-    const TmdbMetadata = sequelize.define('TmdbMetadata', {
-        tmdb_id: { type: DataTypes.STRING, primaryKey: true },
-        imdb_id: { type: DataTypes.STRING, unique: true },
-        year: { type: DataTypes.INTEGER, index: true },
-        data: { type: DataTypes.JSON, allowNull: false },
-    }, { 
-        tableName: 'tmdb_metadata', 
-        timestamps: true,
-        indexes: [
-            { unique: true, fields: ['imdb_id'] },
-            { fields: ['year'] },
-        ]
-    });
-    
-    const Stream = sequelize.define('Stream', {
-        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-        tmdb_id: { type: DataTypes.STRING, allowNull: false },
-        season: { type: DataTypes.INTEGER, allowNull: true },
-        episode: { type: DataTypes.INTEGER, allowNull: true },
-        episode_end: { type: DataTypes.INTEGER, allowNull: true },
-        infohash: { type: DataTypes.STRING, allowNull: false, unique: true },
-        quality: DataTypes.STRING,
-        language: DataTypes.STRING,
-    }, { 
-        tableName: 'streams', 
-        timestamps: true,
-        indexes: [
-            { unique: true, fields: ['tmdb_id', 'season', 'episode', 'infohash'] },
-            { fields: ['tmdb_id'] },
-            { fields: ['season'] },
-            { fields: ['episode'] },
-            { fields: ['quality'] },
-        ]
+    ui.updatePendingBtn.addEventListener('click', async () => {
+        const threadId = ui.threadIdInput.value;
+        if (!threadId) return showStatus('Select a pending item first.', true);
+        await postData('/update-pending', {
+            threadId,
+            poster: ui.customPosterInput.value || null,
+            description: ui.customDescriptionInput.value || null
+        });
+        loadAllData();
     });
 
-    const RdTorrent = sequelize.define('RdTorrent', {
-        infohash: { type: DataTypes.STRING, primaryKey: true },
-        rd_id: { type: DataTypes.STRING, allowNull: false, unique: true },
-        status: { type: DataTypes.STRING, allowNull: false },
-        files: { type: DataTypes.JSON, allowNull: true },
-        links: { type: DataTypes.JSON, allowNull: true },
-        last_checked: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { tableName: 'rd_torrents', timestamps: true });
+    ui.rdCacheBtn.addEventListener('click', async () => {
+        const threadId = ui.threadIdInput.value;
+        if (!threadId) return showStatus('Select a pending item first.', true);
+        await postData('/rd-cache-pending', { threadId });
+    });
 
-    const FailedThread = sequelize.define('FailedThread', {
-        thread_hash: { type: DataTypes.STRING, primaryKey: true },
-        raw_title: DataTypes.STRING,
-        reason: DataTypes.STRING,
-        last_attempt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { tableName: 'failed_threads', timestamps: false, indexes: [{ fields: ['last_attempt'] }] });
-    
-    return { Thread, TmdbMetadata, Stream, FailedThread, RdTorrent };
-};
+    ui.linkOfficialBtn.addEventListener('click', async () => {
+        const threadId = ui.threadIdInput.value;
+        const manualId = ui.manualIdInput.value.trim();
+        if (!threadId || !manualId) return showStatus('Select a pending item and enter an ID.', true);
+        const res = await postData('/link-official', { threadId, manualId });
+        if (res.ok) {
+            ui.manualIdInput.value = '';
+            loadAllData();
+        }
+    });
+
+    ui.rlPrev.addEventListener('click', async () => {
+        if (rlState.page <= 1) return;
+        const page = rlState.page - 1;
+        const payload = await fetchData(`/recent/linked?page=${page}&limit=${rlState.limit}`);
+        renderRecentLinkedPaginated(payload);
+    });
+    ui.rlNext.addEventListener('click', async () => {
+        const max = Math.max(1, Math.ceil(rlState.total / rlState.limit));
+        if (rlState.page >= max) return;
+        const page = rlState.page + 1;
+        const payload = await fetchData(`/recent/linked?page=${page}&limit=${rlState.limit}`);
+        renderRecentLinkedPaginated(payload);
+    });
+
+    loadAllData();
+});
+</script>
+</body>
+</html>
