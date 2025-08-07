@@ -17,11 +17,10 @@
     button.secondary:hover { background-color: #5a6268; }
     button.warning { background-color: #ffc107; color: black; }
     button.warning:hover { background-color: #e0a800; }
+    button.ghost { background: transparent; color: #444; border: 1px solid #ddd; }
+    button.ghost:hover { background: #f7f7f7; }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
-    #pending-list { list-style-type: none; padding: 0; max-height: 400px; overflow-y: auto; }
-    #pending-list li { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; word-break: break-all; }
-    #pending-list li:hover, #pending-list li.selected { background-color: #f0f8ff; }
-    textarea, input { width: 95%; padding: 8px; margin-top: 5px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #ccc; }
+    input, textarea { width: 95%; padding: 8px; margin-top: 5px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #ccc; }
     table { width: 100%; border-collapse: collapse; margin-top: 12px; }
     th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #eee; vertical-align: middle; }
     th { background-color: #007bff; color: white; position: sticky; top: 0; z-index: 1; }
@@ -37,11 +36,20 @@
     .chip { display: inline-block; background: #eef2ff; color: #1d4ed8; border: 1px solid #c7d2fe; padding: 2px 8px; border-radius: 999px; font-size: 0.85em; margin-right: 6px; }
     .chip.lang { background: #ecfeff; color: #0e7490; border-color: #a5f3fc; }
     .chip.lock { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
+    .subtle { color: #777; font-size: 0.85em; }
+    .flex { display: flex; gap: 8px; align-items: center; }
+    .gap-4 { gap: 12px; }
     .row-actions { white-space: nowrap; }
-    .flex { display: flex; gap: 8px; align-items: center; }
-    .pagination { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
     .streams-wrapper { border: 1px solid #eee; border-radius: 6px; background: #fff; max-height: 340px; overflow: auto; }
-    .subtle { color: #777; font-size: 0.85em; }
+    .pagination { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+    /* Dual list */
+    .dual { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; }
+    .listbox { border: 1px solid #ddd; border-radius: 6px; background: #fff; height: 320px; overflow: auto; padding: 6px; }
+    .listbox h4 { margin: 6px; }
+    .list-item { padding: 8px; border-bottom: 1px solid #f2f2f2; cursor: pointer; }
+    .list-item:hover { background: #f8fafc; }
+    .list-item.selected { background: #eef6ff; }
+    .list-actions { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
   </style>
 </head>
 <body>
@@ -76,39 +84,75 @@
     </div>
 
     <h2 style="margin-top: 40px;">Edit & Rescue Pending Items</h2>
+
+    <div class="card">
+      <h3>1. Pick Pending Items</h3>
+      <div class="dual">
+        <div>
+          <h4>Available</h4>
+          <div id="pending-available" class="listbox"></div>
+        </div>
+        <div class="list-actions">
+          <button id="move-selected-right" class="ghost">→ Move</button>
+          <button id="move-selected-left" class="ghost">← Remove</button>
+          <button id="move-all-right" class="ghost">→→ Move All</button>
+          <button id="clear-right" class="ghost">←← Clear</button>
+        </div>
+        <div>
+          <h4>Selected</h4>
+          <div id="pending-selected" class="listbox"></div>
+          <div class="flex gap-4" style="margin-top:8px;">
+            <button id="focus-item" class="secondary">Set Focus</button>
+            <span class="subtle">Focused item drives RD caching below.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="grid">
       <div class="card">
-        <h3>1. Select a Pending Title</h3>
-        <ul id="pending-list"></ul>
-      </div>
-      <div class="card">
-        <h3>2. Edit Metadata or Link Official ID</h3>
+        <h3>2A. Edit Metadata (Focused Item)</h3>
         <form id="edit-form">
-          <p><strong>Selected Title:</strong> <span id="selected-title">None</span></p>
+          <p><strong>Focused Title:</strong> <span id="selected-title">None</span></p>
           <input type="hidden" id="thread-id-input">
-          
+
           <label for="custom-poster">Custom Poster URL:</label>
           <input type="url" id="custom-poster" placeholder="https://i.imgur.com/poster.png">
-          
+
           <label for="custom-description">Custom Description:</label>
           <textarea id="custom-description" rows="4" placeholder="A short description..."></textarea>
-          
-          <div class="flex">
-            <button type="button" id="update-pending-btn" class="secondary">Save & Keep Pending</button>
-          </div>
-          <hr>
 
-          <label for="manual-id">Link with Official IMDb ID (tt...) or TMDB ID (tv:... or movie:...):</label>
-          <input type="text" id="manual-id" placeholder="e.g., tt8111088 or tv:94997">
-          
-          <button type="button" id="link-official-btn">Link Official ID</button>
+          <div class="flex">
+            <button type="button" id="update-pending-btn" class="secondary">Save Focused</button>
+          </div>
         </form>
+      </div>
+
+      <div class="card">
+        <h3>2B. Link Official ID</h3>
+        <p class="muted">Accepts IMDb (tt...) or TMDB (tv:... or movie:...).</p>
+        <div class="flex gap-4">
+          <input type="text" id="manual-id" placeholder="e.g., tt8111088 or tv:94997" style="flex:1;">
+          <button type="button" id="link-official-btn">Link Focused</button>
+        </div>
+        <hr>
+        <h4>Bulk operations (Selected List)</h4>
+        <div class="flex gap-4">
+          <input type="text" id="bulk-manual-id" placeholder="IMDb/ TMDB ID applied to all selected" style="flex:1;">
+          <button type="button" id="bulk-link-btn" class="warning">Bulk Link</button>
+        </div>
+        <div class="flex gap-4" style="margin-top:8px;">
+          <input type="url" id="bulk-poster" placeholder="Poster URL for all selected" style="flex:1;">
+          <input type="text" id="bulk-description" placeholder="Description for all selected" style="flex:1;">
+          <button type="button" id="bulk-update-btn" class="secondary">Bulk Update Meta</button>
+        </div>
+        <p class="muted">Tip: Great for series like Bigg Boss where many threads need the same ID or metadata.</p>
       </div>
     </div>
 
     <div class="card">
       <h3>3. Choose a Stream to Cache in Real-Debrid</h3>
-      <p class="muted">Select exactly one stream. Already-initiated streams are marked and disabled.</p>
+      <p class="muted">Operates on the focused item only. Select exactly one stream; already-initiated streams are marked and disabled.</p>
       <div class="streams-wrapper">
         <table id="streams-table">
           <thead>
@@ -119,28 +163,13 @@
             </tr>
           </thead>
           <tbody id="streams-tbody">
-            <tr><td colspan="3" class="muted">Select a pending item to see streams.</td></tr>
+            <tr><td colspan="3" class="muted">Set a focused item to see streams.</td></tr>
           </tbody>
         </table>
       </div>
       <div class="flex" style="margin-top: 10px;">
         <button id="rd-cache-selected-btn" class="warning" disabled>Cache selected in RD</button>
       </div>
-    </div>
-
-    <h2 style="margin-top: 40px;">Correct a Mislinked Item</h2>
-    <div class="card">
-      <form id="correction-form">
-        <p>This tool re-links a Thread and its Streams from an incorrect IMDb ID to the correct one.</p>
-        
-        <label for="current-imdb-id">Current (Incorrect) IMDb ID:</label>
-        <input type="text" id="current-imdb-id" placeholder="e.g., tt1234567">
-
-        <label for="correct-id">New (Correct) IMDb or TMDB ID:</label>
-        <input type="text" id="correct-id" placeholder="e.g., tt7654321 or movie:12345">
-        
-        <button type="button" id="correct-link-btn" class="warning">Correct Link</button>
-      </form>
     </div>
 
     <h2 style="margin-top: 40px;">Recent Activity</h2>
@@ -179,7 +208,6 @@ document.addEventListener('DOMContentLoaded', () => {
     totalLinked: document.getElementById('total-linked'),
     totalPending: document.getElementById('total-pending'),
     totalFailed: document.getElementById('total-failed'),
-    pendingList: document.getElementById('pending-list'),
     failuresTableBody: document.querySelector('#failures-table tbody'),
     actionStatus: document.getElementById('action-status'),
     triggerCrawlBtn: document.getElementById('trigger-crawl'),
@@ -190,11 +218,13 @@ document.addEventListener('DOMContentLoaded', () => {
     manualIdInput: document.getElementById('manual-id'),
     updatePendingBtn: document.getElementById('update-pending-btn'),
     linkOfficialBtn: document.getElementById('link-official-btn'),
+    bulkManualIdInput: document.getElementById('bulk-manual-id'),
+    bulkPosterInput: document.getElementById('bulk-poster'),
+    bulkDescInput: document.getElementById('bulk-description'),
+    bulkLinkBtn: document.getElementById('bulk-link-btn'),
+    bulkUpdateBtn: document.getElementById('bulk-update-btn'),
     rdCacheSelectedBtn: document.getElementById('rd-cache-selected-btn'),
     streamsTableBody: document.getElementById('streams-tbody'),
-    currentImdbIdInput: document.getElementById('current-imdb-id'),
-    correctIdInput: document.getElementById('correct-id'),
-    correctLinkBtn: document.getElementById('correct-link-btn'),
     status: {
       isCrawling: document.getElementById('st-is-crawling'),
       lastUpdated: document.getElementById('st-last-updated'),
@@ -208,10 +238,20 @@ document.addEventListener('DOMContentLoaded', () => {
     rlPrev: document.getElementById('rl-prev'),
     rlNext: document.getElementById('rl-next'),
     rlPage: document.getElementById('rl-page'),
+
+    // Dual list
+    availableBox: document.getElementById('pending-available'),
+    selectedBox: document.getElementById('pending-selected'),
+    moveRightBtn: document.getElementById('move-selected-right'),
+    moveLeftBtn: document.getElementById('move-selected-left'),
+    moveAllRightBtn: document.getElementById('move-all-right'),
+    clearRightBtn: document.getElementById('clear-right'),
+    focusBtn: document.getElementById('focus-item'),
   };
 
-  let currentPendingData = [];
-  let currentSelectedThread = null; // store selected thread object (title/year/type)
+  let allPending = [];
+  let selectedIds = new Set();
+  let focusedItem = null;
   let rlState = { page: 1, limit: 15, total: 0 };
   let streamState = { items: [], locked: new Set(), selectedInfohash: null };
 
@@ -222,33 +262,21 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function fetchData(endpoint) {
-    try {
-      const res = await fetch(`${apiBase}${endpoint}`);
-      if (!res.ok) {
-        showStatus(`Failed to fetch ${endpoint}`, true);
-        return null;
-      }
-      return await res.json();
-    } catch (_) {
-      showStatus(`Error fetching ${endpoint}`, true);
-      return null;
-    }
+    const res = await fetch(`${apiBase}${endpoint}`).catch(() => null);
+    if (!res || !res.ok) { showStatus(`Failed to fetch ${endpoint}`, true); return null; }
+    return res.json().catch(() => null);
   }
 
   async function postData(endpoint, body) {
-    try {
-      const res = await fetch(`${apiBase}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body || {})
-      });
-      const json = await res.json().catch(() => ({}));
-      showStatus(json.message || (res.ok ? 'Success' : 'Failed'), !res.ok);
-      return { ok: res.ok, data: json };
-    } catch (_) {
-      showStatus(`Error posting ${endpoint}`, true);
-      return { ok: false, data: null };
-    }
+    const res = await fetch(`${apiBase}${endpoint}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    }).catch(() => null);
+    const ok = !!res && res.ok;
+    let json = {};
+    try { json = await res.json(); } catch (_) {}
+    showStatus(json.message || (ok ? 'Success' : 'Failed'), !ok);
+    return { ok, data: json };
   }
 
   function msToBadge(ms) {
@@ -275,29 +303,86 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderRecent(recent) {
     if (!recent) return;
     const rows = [];
-    recent.linked.forEach(item => {
-      rows.push(`<tr><td>Linked</td><td>${item.title} (${item.type})</td><td>${new Date(item.updatedAt).toLocaleString()}</td></tr>`);
-    });
-    recent.failures.forEach(item => {
-      rows.push(`<tr><td>Failed</td><td>${item.title} — ${item.reason}</td><td>${new Date(item.last_attempt).toLocaleString()}</td></tr>`);
-    });
+    recent.linked.forEach(item => rows.push(`<tr><td>Linked</td><td>${item.title} (${item.type})</td><td>${new Date(item.updatedAt).toLocaleString()}</td></tr>`));
+    recent.failures.forEach(item => rows.push(`<tr><td>Failed</td><td>${item.title} — ${item.reason}</td><td>${new Date(item.last_attempt).toLocaleString()}</td></tr>`));
     ui.recentTableBody.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="3">No recent activity.</td></tr>';
   }
 
   function renderRecentLinkedPaginated(payload) {
     if (!payload) return;
-    rlState.total = payload.total;
-    rlState.page = payload.page;
+    rlState.total = payload.total; rlState.page = payload.page;
     ui.rlPage.textContent = String(rlState.page);
     const rows = payload.items.map(i => `<tr><td>Linked</td><td>${i.title} (${i.type})</td><td>${new Date(i.updatedAt).toLocaleString()}</td></tr>`).join('');
     ui.recentTableBody.innerHTML = rows || '<tr><td colspan="3">No items.</td></tr>';
   }
 
+  function renderDualLists() {
+    ui.availableBox.innerHTML = '';
+    ui.selectedBox.innerHTML = '';
+    const available = allPending.filter(p => !selectedIds.has(p.id));
+    const selected = allPending.filter(p => selectedIds.has(p.id));
+
+    available.forEach(t => {
+      const div = document.createElement('div');
+      div.className = 'list-item';
+      div.dataset.id = t.id;
+      div.textContent = `${t.clean_title}${t.year ? ' (' + t.year + ')' : ''}`;
+      div.addEventListener('click', () => div.classList.toggle('selected'));
+      ui.availableBox.appendChild(div);
+    });
+    selected.forEach(t => {
+      const div = document.createElement('div');
+      div.className = 'list-item';
+      div.dataset.id = t.id;
+      div.textContent = `${t.clean_title}${t.year ? ' (' + t.year + ')' : ''}`;
+      div.addEventListener('click', () => div.classList.toggle('selected'));
+      ui.selectedBox.appendChild(div);
+    });
+  }
+
+  function getSelectedIds(boxEl) {
+    return Array.from(boxEl.querySelectorAll('.list-item.selected')).map(el => parseInt(el.dataset.id, 10));
+    }
+
+  // Move buttons
+  ui.moveRightBtn.addEventListener('click', () => {
+    const ids = getSelectedIds(ui.availableBox);
+    ids.forEach(id => selectedIds.add(id));
+    renderDualLists();
+  });
+  ui.moveLeftBtn.addEventListener('click', () => {
+    const ids = getSelectedIds(ui.selectedBox);
+    ids.forEach(id => selectedIds.delete(id));
+    renderDualLists();
+  });
+  ui.moveAllRightBtn.addEventListener('click', () => {
+    allPending.forEach(t => selectedIds.add(t.id));
+    renderDualLists();
+  });
+  ui.clearRightBtn.addEventListener('click', () => {
+    selectedIds.clear();
+    renderDualLists();
+  });
+
+  // Focus: set single focused item for RD section and per-item edits
+  ui.focusBtn.addEventListener('click', () => {
+    const ids = getSelectedIds(ui.selectedBox);
+    if (ids.length !== 1) { showStatus('Select exactly one item on the right to set focus.', true); return; }
+    const item = allPending.find(p => p.id === ids[0]);
+    if (!item) return;
+    focusedItem = item;
+    ui.selectedTitle.textContent = `${item.clean_title}${item.year ? ' (' + item.year + ')' : ''}`;
+    ui.threadIdInput.value = item.id;
+    ui.customPosterInput.value = item.custom_poster || '';
+    ui.customDescriptionInput.value = item.custom_description || '';
+    loadStreamsForPending(item.id);
+    showStatus('Focus set.');
+  });
+
+  // Streams
   function streamTitleLabel(item, thread) {
-    if (!thread) return '';
     const base = `${thread.clean_title || ''}${thread.year ? ' (' + thread.year + ')' : ''}`;
     if (thread.type === 'movie') return base || 'Movie';
-    // series
     let epStr = '';
     if (item.type === 'SEASON_PACK') epStr = 'Season Pack';
     else if (item.type === 'EPISODE_PACK') epStr = `E${item.episodeStart}-${item.episodeEnd}`;
@@ -305,352 +390,20 @@ document.addEventListener('DOMContentLoaded', () => {
     return `${base} — S${String(item.season).padStart(2, '0')} ${epStr}`;
   }
 
-  function renderStreamsUI() {
-    const { items, locked, selectedInfohash } = streamState;
-    ui.streamsTableBody.innerHTML = '';
+  function updateCacheButtonState() {
+    const canCache = streamState.selectedInfohash && !streamState.locked.has(streamState.selectedInfohash);
+    ui.rdCacheSelectedBtn.disabled = !canCache;
+  }
 
-    if (!items || items.length === 0) {
-      ui.streamsTableBody.innerHTML = '<tr><td colspan="3" class="muted">No streams detected for this item.</td></tr>';
+  function renderStreamsUI() {
+    ui.streamsTableBody.innerHTML = '';
+    const { items, locked, selectedInfohash } = streamState;
+
+    if (!focusedItem) {
+      ui.streamsTableBody.innerHTML = '<tr><td colspan="3" class="muted">Set a focused item to see streams.</td></tr>';
       ui.rdCacheSelectedBtn.disabled = true;
       return;
     }
-
-    items.forEach((it) => {
-      const tr = document.createElement('tr');
-      const isLocked = locked.has(it.infohash);
-
-      // Left: Title (movie/series) and small infohash subtext
-      const tdTitle = document.createElement('td');
-      const titleDiv = document.createElement('div');
-      titleDiv.textContent = streamTitleLabel(it, currentSelectedThread);
-      const infohashDiv = document.createElement('div');
-      infohashDiv.className = 'subtle';
-      infohashDiv.textContent = it.infohash;
-      tdTitle.appendChild(titleDiv);
-      tdTitle.appendChild(infohashDiv);
-
-      // Middle: quality/lang chips and lock badge
-      const tdQL = document.createElement('td');
-      const q = documentYou're absolutely right to make it more admin-friendly. We already have the backend providing the selected pending thread and its parsed streams; we just needed to redesign the UI for section 3 to present title, quality/language, and selection clearly.
-
-What I changed
-- Redesigned the “Choose a Stream to Cache in Real-Debrid” section into a 3-column table layout:
-  - Left column: Clean title + year, plus season/episode details for series, and the infohash shown as muted subtext.
-  - Middle column: Quality and language chips; an “RD initiated” chip for locked items.
-  - Right column: Radio button to select exactly one stream; disabled if locked.
-- Kept existing endpoints and locking logic; only changed the rendering and selection behavior.
-- Auto-selects the first unlocked stream when a pending item is chosen, and refreshes lock state immediately after caching.
-
-<dyad-write path="public/admin.html" description="Redesigned RD caching UI into a 3-column table with title, quality/language chips, lock badges, and single selection.">
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Stremio Addon Admin</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; padding: 20px; background-color: #f4f4f4; color: #333; }
-    .container { max-width: 1200px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-    h1, h2 { color: #5a5a5a; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 40px; }
-    .card { padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
-    .stat { font-size: 2em; font-weight: bold; color: #007bff; }
-    button { background-color: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 1em; margin-right: 10px; }
-    button:hover { background-color: #0056b3; }
-    button.secondary { background-color: #6c757d; }
-    button.secondary:hover { background-color: #5a6268; }
-    button.warning { background-color: #ffc107; color: black; }
-    button.warning:hover { background-color: #e0a800; }
-    button:disabled { opacity: 0.6; cursor: not-allowed; }
-    #pending-list { list-style-type: none; padding: 0; max-height: 400px; overflow-y: auto; }
-    #pending-list li { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; word-break: break-all; }
-    #pending-list li:hover, #pending-list li.selected { background-color: #f0f8ff; }
-    textarea, input { width: 95%; padding: 8px; margin-top: 5px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #ccc; }
-    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #eee; vertical-align: middle; }
-    th { background-color: #007bff; color: white; position: sticky; top: 0; z-index: 1; }
-    tr:nth-child(even) { background-color: #fafafa; }
-    hr { margin: 20px 0; }
-    .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 10px; }
-    .status-item { padding: 10px; border: 1px solid #eee; border-radius: 6px; background: #fafafa; }
-    .muted { color: #666; font-size: 0.9em; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; margin-left: 6px; }
-    .ok { background: #e6f4ea; color: #137333; }
-    .warn { background: #fef7e0; color: #a36f00; }
-    .danger { background: #fce8e6; color: #a50e0e; }
-    .chip { display: inline-block; background: #eef2ff; color: #1d4ed8; border: 1px solid #c7d2fe; padding: 2px 8px; border-radius: 999px; font-size: 0.85em; margin-right: 6px; }
-    .chip.lang { background: #ecfeff; color: #0e7490; border-color: #a5f3fc; }
-    .chip.lock { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
-    .streams-wrapper { border: 1px solid #eee; border-radius: 6px; background: #fff; max-height: 340px; overflow: auto; }
-    .subtle { color: #777; font-size: 0.85em; }
-    .flex { display: flex; gap: 8px; align-items: center; }
-    .pagination { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>Stremio Addon Admin</h1>
-
-    <div class="card">
-      <h2>Status</h2>
-      <div class="status-grid">
-        <div class="status-item"><strong>Workflow running:</strong> <span id="st-is-crawling">-</span></div>
-        <div class="status-item"><strong>Last workflow update:</strong> <span id="st-last-updated">-</span> <span id="st-cache-age" class="badge">-</span></div>
-        <div class="status-item"><strong>RD enabled:</strong> <span id="st-rd">-</span></div>
-        <div class="status-item"><strong>TMDB configured:</strong> <span id="st-tmdb">-</span></div>
-        <div class="status-item"><strong>Tracker count:</strong> <span id="st-trackers">-</span></div>
-        <div class="status-item"><strong>DB size:</strong> <span id="st-db">-</span></div>
-      </div>
-      <p class="muted">Health endpoint provides a quick snapshot. Use the Actions below to trigger a manual crawl.</p>
-    </div>
-
-    <div class="grid">
-      <div class="card">
-        <h2>Dashboard</h2>
-        <p>Total Linked Series: <span id="total-linked" class="stat">0</span></p>
-        <p>Pending TMDB Match: <span id="total-pending" class="stat">0</span></p>
-        <p>Critical Parse Failures: <span id="total-failed" class="stat">0</span></p>
-      </div>
-      <div class="card">
-        <h2>Actions</h2>
-        <button id="trigger-crawl">Trigger Manual Crawl</button>
-        <p id="action-status" style="margin-top: 10px; font-weight: bold;"></p>
-      </div>
-    </div>
-
-    <h2 style="margin-top: 40px;">Edit & Rescue Pending Items</h2>
-    <div class="grid">
-      <div class="card">
-        <h3>1. Select a Pending Title</h3>
-        <ul id="pending-list"></ul>
-      </div>
-      <div class="card">
-        <h3>2. Edit Metadata or Link Official ID</h3>
-        <form id="edit-form">
-          <p><strong>Selected Title:</strong> <span id="selected-title">None</span></p>
-          <input type="hidden" id="thread-id-input">
-          
-          <label for="custom-poster">Custom Poster URL:</label>
-          <input type="url" id="custom-poster" placeholder="https://i.imgur.com/poster.png">
-          
-          <label for="custom-description">Custom Description:</label>
-          <textarea id="custom-description" rows="4" placeholder="A short description..."></textarea>
-          
-          <div class="flex">
-            <button type="button" id="update-pending-btn" class="secondary">Save & Keep Pending</button>
-          </div>
-          <hr>
-
-          <label for="manual-id">Link with Official IMDb ID (tt...) or TMDB ID (tv:... or movie:...):</label>
-          <input type="text" id="manual-id" placeholder="e.g., tt8111088 or tv:94997">
-          
-          <button type="button" id="link-official-btn">Link Official ID</button>
-        </form>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>3. Choose a Stream to Cache in Real-Debrid</h3>
-      <p class="muted">Select exactly one stream. Already-initiated streams are marked and disabled.</p>
-      <div class="streams-wrapper">
-        <table id="streams-table">
-          <thead>
-            <tr>
-              <th style="width: 50%;">Title</th>
-              <th style="width: 30%;">Quality / Language</th>
-              <th style="width: 20%;">Select</th>
-            </tr>
-          </thead>
-          <tbody id="streams-tbody">
-            <tr><td colspan="3" class="muted">Select a pending item to see streams.</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="flex" style="margin-top: 10px;">
-        <button id="rd-cache-selected-btn" class="warning" disabled>Cache selected in RD</button>
-      </div>
-    </div>
-
-    <h2 style="margin-top: 40px;">Correct a Mislinked Item</h2>
-    <div class="card">
-      <form id="correction-form">
-        <p>This tool re-links a Thread and its Streams from an incorrect IMDb ID to the correct one.</p>
-        
-        <label for="current-imdb-id">Current (Incorrect) IMDb ID:</label>
-        <input type="text" id="current-imdb-id" placeholder="e.g., tt1234567">
-
-        <label for="correct-id">New (Correct) IMDb or TMDB ID:</label>
-        <input type="text" id="correct-id" placeholder="e.g., tt7654321 or movie:12345">
-        
-        <button type="button" id="correct-link-btn" class="warning">Correct Link</button>
-      </form>
-    </div>
-
-    <h2 style="margin-top: 40px;">Recent Activity</h2>
-    <div class="card">
-      <div class="flex">
-        <strong>Linked (paginated):</strong>
-        <button id="rl-prev" class="secondary">Prev</button>
-        <span id="rl-page">1</span>
-        <button id="rl-next" class="secondary">Next</button>
-      </div>
-      <table id="recent-table">
-        <thead>
-          <tr>
-            <th>Type</th>
-            <th>Title / Reason</th>
-            <th>When</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-
-    <h2 style="margin-top: 40px;">Critical Parse Failures</h2>
-    <div class="card">
-      <table id="failures-table">
-        <thead><tr><th>Failed Title</th><th>Reason</th><th>Last Attempt</th><th>Actions</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </div>
-
-<script>
-document.addEventListener('DOMContentLoaded', () => {
-  const apiBase = '/admin/api';
-  const ui = {
-    totalLinked: document.getElementById('total-linked'),
-    totalPending: document.getElementById('total-pending'),
-    totalFailed: document.getElementById('total-failed'),
-    pendingList: document.getElementById('pending-list'),
-    failuresTableBody: document.querySelector('#failures-table tbody'),
-    actionStatus: document.getElementById('action-status'),
-    triggerCrawlBtn: document.getElementById('trigger-crawl'),
-    selectedTitle: document.getElementById('selected-title'),
-    threadIdInput: document.getElementById('thread-id-input'),
-    customPosterInput: document.getElementById('custom-poster'),
-    customDescriptionInput: document.getElementById('custom-description'),
-    manualIdInput: document.getElementById('manual-id'),
-    updatePendingBtn: document.getElementById('update-pending-btn'),
-    linkOfficialBtn: document.getElementById('link-official-btn'),
-    rdCacheSelectedBtn: document.getElementById('rd-cache-selected-btn'),
-    streamsTableBody: document.getElementById('streams-tbody'),
-    currentImdbIdInput: document.getElementById('current-imdb-id'),
-    correctIdInput: document.getElementById('correct-id'),
-    correctLinkBtn: document.getElementById('correct-link-btn'),
-    status: {
-      isCrawling: document.getElementById('st-is-crawling'),
-      lastUpdated: document.getElementById('st-last-updated'),
-      rd: document.getElementById('st-rd'),
-      tmdb: document.getElementById('st-tmdb'),
-      trackers: document.getElementById('st-trackers'),
-      db: document.getElementById('st-db'),
-      cacheAge: document.getElementById('st-cache-age'),
-    },
-    recentTableBody: document.querySelector('#recent-table tbody'),
-    rlPrev: document.getElementById('rl-prev'),
-    rlNext: document.getElementById('rl-next'),
-    rlPage: document.getElementById('rl-page'),
-  };
-
-  let currentPendingData = [];
-  let currentSelectedThread = null;
-  let rlState = { page: 1, limit: 15, total: 0 };
-  let streamState = { items: [], locked: new Set(), selectedInfohash: null };
-
-  function showStatus(message, isError = false) {
-    ui.actionStatus.textContent = message || '';
-    ui.actionStatus.style.color = isError ? 'red' : 'green';
-    if (message) setTimeout(() => (ui.actionStatus.textContent = ''), 7000);
-  }
-
-  async function fetchData(endpoint) {
-    try {
-      const res = await fetch(`${apiBase}${endpoint}`);
-      if (!res.ok) {
-        showStatus(`Failed to fetch ${endpoint}`, true);
-        return null;
-      }
-      return await res.json();
-    } catch (_) {
-      showStatus(`Error fetching ${endpoint}`, true);
-      return null;
-    }
-  }
-
-  async function postData(endpoint, body) {
-    try {
-      const res = await fetch(`${apiBase}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body || {})
-      });
-      const json = await res.json().catch(() => ({}));
-      showStatus(json.message || (res.ok ? 'Success' : 'Failed'), !res.ok);
-      return { ok: res.ok, data: json };
-    } catch (_) {
-      showStatus(`Error posting ${endpoint}`, true);
-      return { ok: false, data: null };
-    }
-  }
-
-  function msToBadge(ms) {
-    if (ms == null) return { text: '-', cls: 'warn' };
-    const mins = Math.round(ms / 60000);
-    if (mins <= 10) return { text: `${mins}m fresh`, cls: 'ok' };
-    if (mins <= 60) return { text: `${mins}m`, cls: 'warn' };
-    return { text: `${mins}m stale`, cls: 'danger' };
-  }
-
-  function renderHealth(h) {
-    if (!h) return;
-    ui.status.isCrawling.textContent = h.isCrawling ? 'Yes' : 'No';
-    ui.status.lastUpdated.textContent = h.lastUpdated ? new Date(h.lastUpdated).toLocaleString() : '-';
-    ui.status.rd.textContent = h.realDebridEnabled ? 'Yes' : 'No';
-    ui.status.tmdb.textContent = h.tmdbConfigured ? 'Yes' : 'No';
-    ui.status.trackers.textContent = h.trackerCount ?? '-';
-    ui.status.db.textContent = h.dbSizeBytes != null ? (Math.round(h.dbSizeBytes / 1024 / 1024 * 10) / 10) + ' MB' : '-';
-    const badge = msToBadge(h.cacheAges?.dashboardMs ?? null);
-    ui.status.cacheAge.textContent = badge.text;
-    ui.status.cacheAge.className = `badge ${badge.cls}`;
-  }
-
-  function renderRecent(recent) {
-    if (!recent) return;
-    const rows = [];
-    recent.linked.forEach(item => {
-      rows.push(`<tr><td>Linked</td><td>${item.title} (${item.type})</td><td>${new Date(item.updatedAt).toLocaleString()}</td></tr>`);
-    });
-    recent.failures.forEach(item => {
-      rows.push(`<tr><td>Failed</td><td>${item.title} — ${item.reason}</td><td>${new Date(item.last_attempt).toLocaleString()}</td></tr>`);
-    });
-    ui.recentTableBody.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="3">No recent activity.</td></tr>';
-  }
-
-  function renderRecentLinkedPaginated(payload) {
-    if (!payload) return;
-    rlState.total = payload.total;
-    rlState.page = payload.page;
-    ui.rlPage.textContent = String(rlState.page);
-    const rows = payload.items.map(i => `<tr><td>Linked</td><td>${i.title} (${i.type})</td><td>${new Date(i.updatedAt).toLocaleString()}</td></tr>`).join('');
-    ui.recentTableBody.innerHTML = rows || '<tr><td colspan="3">No items.</td></tr>';
-  }
-
-  function streamTitleLabel(item, thread) {
-    if (!thread) return '';
-    const base = `${thread.clean_title || ''}${thread.year ? ' (' + thread.year + ')' : ''}`;
-    if (thread.type === 'movie') return base || 'Movie';
-    let epStr = '';
-    if (item.type === 'SEASON_PACK') epStr = 'Season Pack';
-    else if (item.type === 'EPISODE_PACK') epStr = `E${item.episodeStart}-${item.episodeEnd}`;
-    else epStr = `E${item.episode}`;
-    return `${base} — S${String(item.season).padStart(2, '0')} ${epStr}`;
-  }
-
-  function renderStreamsUI() {
-    const { items, locked, selectedInfohash } = streamState;
-    ui.streamsTableBody.innerHTML = '';
-
     if (!items || items.length === 0) {
       ui.streamsTableBody.innerHTML = '<tr><td colspan="3" class="muted">No streams detected for this item.</td></tr>';
       ui.rdCacheSelectedBtn.disabled = true;
@@ -663,7 +416,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const tdTitle = document.createElement('td');
       const titleDiv = document.createElement('div');
-      titleDiv.textContent = streamTitleLabel(it, currentSelectedThread);
+      titleDiv.textContent = streamTitleLabel(it, focusedItem);
       const infohashDiv = document.createElement('div');
       infohashDiv.className = 'subtle';
       infohashDiv.textContent = it.infohash;
@@ -710,11 +463,6 @@ document.addEventListener('DOMContentLoaded', () => {
     updateCacheButtonState();
   }
 
-  function updateCacheButtonState() {
-    const canCache = streamState.selectedInfohash && !streamState.locked.has(streamState.selectedInfohash);
-    ui.rdCacheSelectedBtn.disabled = !canCache;
-  }
-
   async function loadStreamsForPending(threadId) {
     streamState = { items: [], locked: new Set(), selectedInfohash: null };
     renderStreamsUI();
@@ -729,7 +477,97 @@ document.addEventListener('DOMContentLoaded', () => {
     renderStreamsUI();
   }
 
-  async function loadAllData() {
+  // Actions
+  ui.triggerCrawlBtn.addEventListener('click', async () => { await postData('/trigger-crawl', {}); });
+
+  ui.updatePendingBtn.addEventListener('click', async () => {
+    if (!focusedItem) return showStatus('Set a focused item first.', true);
+    await postData('/update-pending', {
+      threadId: focusedItem.id,
+      poster: ui.customPosterInput.value || null,
+      description: ui.customDescriptionInput.value || null
+    });
+    await loadAll();
+  });
+
+  ui.linkOfficialBtn.addEventListener('click', async () => {
+    if (!focusedItem) return showStatus('Set a focused item first.', true);
+    const manualId = ui.manualIdInput.value.trim();
+    if (!manualId) return showStatus('Enter an IMDb/TMDB ID.', true);
+    const res = await postData('/link-official', { threadId: focusedItem.id, manualId });
+    if (res.ok) {
+      ui.manualIdInput.value = '';
+      focusedItem = null;
+      ui.selectedTitle.textContent = 'None';
+      ui.threadIdInput.value = '';
+      ui.customPosterInput.value = '';
+      ui.customDescriptionInput.value = '';
+      ui.streamsTableBody.innerHTML = '<tr><td colspan="3" class="muted">Set a focused item to see streams.</td></tr>';
+      ui.rdCacheSelectedBtn.disabled = true;
+      await loadAll();
+    }
+  });
+
+  ui.bulkLinkBtn.addEventListener('click', async () => {
+    const manualId = ui.bulkManualIdInput.value.trim();
+    if (!manualId) return showStatus('Enter an IMDb/TMDB ID for bulk link.', true);
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return showStatus('Select items on the right for bulk link.', true);
+
+    let okCount = 0;
+    for (const id of ids) {
+      const res = await postData('/link-official', { threadId: id, manualId });
+      if (res.ok) okCount++;
+    }
+    showStatus(`Bulk link complete: ${okCount}/${ids.length} linked.`);
+    ui.bulkManualIdInput.value = '';
+    await loadAll();
+  });
+
+  ui.bulkUpdateBtn.addEventListener('click', async () => {
+    const poster = ui.bulkPosterInput.value.trim();
+    const desc = ui.bulkDescInput.value.trim();
+    if (!poster && !desc) return showStatus('Provide poster or description for bulk update.', true);
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return showStatus('Select items on the right for bulk update.', true);
+
+    let okCount = 0;
+    for (const id of ids) {
+      const res = await postData('/update-pending', {
+        threadId: id,
+        poster: poster || null,
+        description: desc || null
+      });
+      if (res.ok) okCount++;
+    }
+    showStatus(`Bulk update complete: ${okCount}/${ids.length} updated.`);
+    ui.bulkPosterInput.value = '';
+    ui.bulkDescInput.value = '';
+    await loadAll();
+  });
+
+  ui.rdCacheSelectedBtn.addEventListener('click', async () => {
+    if (!focusedItem) return showStatus('Set a focused item first.', true);
+    const infohash = streamState.selectedInfohash;
+    if (!infohash) return showStatus('Select a stream to cache.', true);
+    if (streamState.locked.has(infohash)) return showStatus('This stream is already initiated for RD.', true);
+    const res = await postData('/rd-cache-pending', { threadId: focusedItem.id, infohash });
+    if (res.ok) await loadStreamsForPending(focusedItem.id);
+  });
+
+  ui.rlPrev.addEventListener('click', async () => {
+    if (rlState.page <= 1) return;
+    const payload = await fetchData(`/recent/linked?page=${rlState.page - 1}&limit=${rlState.limit}`);
+    renderRecentLinkedPaginated(payload);
+  });
+  ui.rlNext.addEventListener('click', async () => {
+    const max = Math.max(1, Math.ceil(rlState.total / rlState.limit));
+    if (rlState.page >= max) return;
+    const payload = await fetchData(`/recent/linked?page=${rlState.page + 1}&limit=${rlState.limit}`);
+    renderRecentLinkedPaginated(payload);
+  });
+
+  async function loadAll() {
     const [dashboard, pending, failures, health, recent] = await Promise.all([
       fetchData('/dashboard'),
       fetchData('/pending'),
@@ -737,29 +575,24 @@ document.addEventListener('DOMContentLoaded', () => {
       fetchData('/health'),
       fetchData('/recent?limit=15')
     ]);
-
-    if (dashboard) {
-      ui.totalLinked.textContent = dashboard.linked;
-      ui.totalPending.textContent = dashboard.pending;
-      ui.totalFailed.textContent = dashboard.failed;
-    }
-
+    if (dashboard) { ui.totalLinked.textContent = dashboard.linked; ui.totalPending.textContent = dashboard.pending; ui.totalFailed.textContent = dashboard.failed; }
     if (pending) {
-      currentPendingData = pending;
-      ui.pendingList.innerHTML = '';
-      if (pending.length === 0) {
-        ui.pendingList.innerHTML = '<li>No pending items.</li>';
-      } else {
-        pending.forEach(thread => {
-          const li = document.createElement('li');
-          li.textContent = `${thread.clean_title}${thread.year ? ' (' + thread.year + ')' : ''}`;
-          li.dataset.threadId = thread.id;
-          li.addEventListener('click', () => selectPendingItem(thread.id));
-          ui.pendingList.appendChild(li);
-        });
+      allPending = pending;
+      // prune selectedIds to current pending
+      const valid = new Set(pending.map(p => p.id));
+      selectedIds = new Set(Array.from(selectedIds).filter(id => valid.has(id)));
+      // clear focus if it is no longer pending
+      if (focusedItem && !valid.has(focusedItem.id)) {
+        focusedItem = null;
+        ui.selectedTitle.textContent = 'None';
+        ui.threadIdInput.value = '';
+        ui.customPosterInput.value = '';
+        ui.customDescriptionInput.value = '';
+        ui.streamsTableBody.innerHTML = '<tr><td colspan="3" class="muted">Set a focused item to see streams.</td></tr>';
+        ui.rdCacheSelectedBtn.disabled = true;
       }
+      renderDualLists();
     }
-
     if (failures) {
       ui.failuresTableBody.innerHTML = '';
       if (failures.length === 0) {
@@ -767,114 +600,25 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         failures.forEach(f => {
           const tr = document.createElement('tr');
-          const tdTitle = document.createElement('td');
-          const tdReason = document.createElement('td');
-          const tdWhen = document.createElement('td');
-          const tdActions = document.createElement('td');
-
-          tdTitle.textContent = f.raw_title || '-';
-          tdReason.textContent = f.reason || '-';
-          tdWhen.textContent = f.last_attempt ? new Date(f.last_attempt).toLocaleString() : '-';
-          tdActions.className = 'row-actions';
-
-          const retryBtn = document.createElement('button');
-          retryBtn.className = 'secondary';
-          retryBtn.textContent = 'Retry';
-          retryBtn.addEventListener('click', async () => {
+          tr.innerHTML = `<td>${f.raw_title || '-'}</td><td>${f.reason || '-'}</td><td>${f.last_attempt ? new Date(f.last_attempt).toLocaleString() : '-'}</td><td class="row-actions"><button class="secondary">Retry</button></td>`;
+          tr.querySelector('button').addEventListener('click', async () => {
             await postData('/retry-parse', { threadHash: f.thread_hash });
-            loadAllData();
+            await loadAll();
           });
-
-          tdActions.appendChild(retryBtn);
-          tr.appendChild(tdTitle);
-          tr.appendChild(tdReason);
-          tr.appendChild(tdWhen);
-          tr.appendChild(tdActions);
           ui.failuresTableBody.appendChild(tr);
         });
       }
     }
-
     renderHealth(health);
     renderRecent(recent);
   }
 
-  function selectPendingItem(threadId) {
-    document.querySelectorAll('#pending-list li').forEach(li => {
-      li.classList.toggle('selected', li.dataset.threadId === String(threadId));
-    });
-    const item = currentPendingData.find(x => String(x.id) === String(threadId));
-    if (!item) return;
-    currentSelectedThread = item;
-    ui.selectedTitle.textContent = `${item.clean_title}${item.year ? ' (' + item.year + ')' : ''}`;
-    ui.threadIdInput.value = item.id;
-    ui.customPosterInput.value = item.custom_poster || '';
-    ui.customDescriptionInput.value = item.custom_description || '';
-    loadStreamsForPending(item.id);
-  }
-
-  ui.triggerCrawlBtn.addEventListener('click', async () => {
+  // initial
+  document.getElementById('trigger-crawl').addEventListener('click', async () => {
     await postData('/trigger-crawl', {});
   });
 
-  ui.updatePendingBtn.addEventListener('click', async () => {
-    const threadId = ui.threadIdInput.value;
-    if (!threadId) return showStatus('Select a pending item first.', true);
-    await postData('/update-pending', {
-      threadId,
-      poster: ui.customPosterInput.value || null,
-      description: ui.customDescriptionInput.value || null
-    });
-    loadAllData();
-  });
-
-  ui.rdCacheSelectedBtn.addEventListener('click', async () => {
-    const threadId = ui.threadIdInput.value;
-    const infohash = streamState.selectedInfohash;
-    if (!threadId) return showStatus('Select a pending item first.', true);
-    if (!infohash) return showStatus('Select a stream to cache.', true);
-    if (streamState.locked.has(infohash)) return showStatus('This stream is already initiated for RD.', true);
-    const res = await postData('/rd-cache-pending', { threadId, infohash });
-    if (res.ok) await loadStreamsForPending(threadId);
-  });
-
-  ui.linkOfficialBtn.addEventListener('click', async () => {
-    const threadId = ui.threadIdInput.value;
-    const manualId = ui.manualIdInput.value.trim();
-    if (!threadId || !manualId) return showStatus('Select a pending item and enter an ID.', true);
-    const res = await postData('/link-official', { threadId, manualId });
-    if (res.ok) {
-      ui.manualIdInput.value = '';
-      loadAllData();
-      ui.streamsTableBody.innerHTML = '<tr><td colspan="3" class="muted">Select a pending item to see streams.</td></tr>';
-      ui.rdCacheSelectedBtn.disabled = true;
-    }
-  });
-
-  ui.correctLinkBtn.addEventListener('click', async () => {
-    const currentImdbId = ui.currentImdbIdInput.value.trim();
-    const correctId = ui.correctIdInput.value.trim();
-    if (!currentImdbId || !correctId) return showStatus('Provide both current IMDb and new ID.', true);
-    await postData('/correct-link', { currentImdbId, correctId });
-    loadAllData();
-  });
-
-  ui.rlPrev.addEventListener('click', async () => {
-    if (rlState.page <= 1) return;
-    const page = rlState.page - 1;
-    const payload = await fetchData(`/recent/linked?page=${page}&limit=${rlState.limit}`);
-    renderRecentLinkedPaginated(payload);
-  });
-
-  ui.rlNext.addEventListener('click', async () => {
-    const max = Math.max(1, Math.ceil(rlState.total / rlState.limit));
-    if (rlState.page >= max) return;
-    const page = rlState.page + 1;
-    const payload = await fetchData(`/recent/linked?page=${page}&limit=${rlState.limit}`);
-    renderRecentLinkedPaginated(payload);
-  });
-
-  loadAllData();
+  loadAll();
 });
 </script>
 </body>
