@@ -48,6 +48,48 @@ router.get('/pending', async (req, res) => {
   }
 });
 
+// NEW: Parsed streams for a pending thread + lock info
+router.get('/pending/:threadId/streams', async (req, res) => {
+  const { threadId } = req.params;
+  try {
+    const thread = await models.Thread.findByPk(threadId);
+    if (!thread || thread.status !== 'pending_tmdb' || !Array.isArray(thread.magnet_uris) || thread.magnet_uris.length === 0) {
+      return res.status(404).json({ message: 'Pending thread with magnets not found.' });
+    }
+    const items = [];
+    for (const magnet of thread.magnet_uris) {
+      const p = parser.parseMagnet(magnet, thread.type);
+      if (!p) continue;
+      const label = thread.type === 'movie'
+        ? `${p.quality || 'SD'}${p.language ? ' • ' + p.language : ''}`
+        : (() => {
+            let epStr = '';
+            if (p.type === 'SEASON_PACK') epStr = 'Season Pack';
+            else if (p.type === 'EPISODE_PACK') epStr = `E${p.episodeStart}-${p.episodeEnd}`;
+            else epStr = `E${p.episode}`;
+            return `S${String(p.season).padStart(2,'0')} ${epStr} • ${p.quality || 'SD'}${p.language ? ' • ' + p.language : ''}`;
+          })();
+      items.push({
+        infohash: p.infohash,
+        type: p.type,
+        season: p.season || null,
+        episode: p.episode || null,
+        episodeStart: p.episodeStart || null,
+        episodeEnd: p.episodeEnd || null,
+        quality: p.quality || null,
+        language: p.language || null,
+        label
+      });
+    }
+    const locks = await models.RdCacheLock.findAll({ where: { infohash: { [Op.in]: items.map(i => i.infohash) } }, raw: true });
+    const locked = new Set(locks.map(l => l.infohash));
+    res.json({ items, locked: Array.from(locked) });
+  } catch (error) {
+    logger.error(error, 'Failed to fetch parsed streams for pending item.');
+    res.status(500).json({ message: 'Error fetching streams.' });
+  }
+});
+
 // List critical parse failures
 router.get('/failures', async (req, res) => {
   try {
@@ -299,10 +341,10 @@ router.post('/retry-parse', async (req, res) => {
   }
 });
 
-// Manually cache magnets for a pending thread in Real-Debrid
+// Enhanced: Manually cache magnets for a pending thread in Real-Debrid with duplicate lock
 router.post('/rd-cache-pending', async (req, res) => {
   if (!rd.isEnabled) return res.status(400).json({ message: 'Real-Debrid is not enabled.' });
-  const { threadId } = req.body || {};
+  const { threadId, infohash } = req.body || {};
   if (!threadId) return res.status(400).json({ message: 'threadId is required.' });
 
   try {
@@ -311,12 +353,32 @@ router.post('/rd-cache-pending', async (req, res) => {
       return res.status(404).json({ message: 'Pending thread with magnets not found.' });
     }
 
-    let success = 0;
+    // Build parsed list, optionally filter by single infohash
+    const parsed = [];
     for (const magnet of thread.magnet_uris) {
-      const resp = await rd.addAndSelect(magnet);
+      const p = parser.parseMagnet(magnet, thread.type);
+      if (p) parsed.push(p);
+    }
+    const targets = infohash ? parsed.filter(p => p.infohash === infohash) : parsed;
+
+    if (targets.length === 0) return res.status(404).json({ message: 'No matching streams to cache.' });
+
+    let success = 0;
+    for (const item of targets) {
+      // lock to prevent duplicates
+      const existing = await models.RdCacheLock.findByPk(item.infohash);
+      if (existing) {
+        logger.info({ infohash: item.infohash }, 'RD cache already initiated; skipping duplicate.');
+        continue;
+      }
+      // Upsert lock first
+      await models.RdCacheLock.upsert({ infohash: item.infohash, createdAt: new Date() });
+      const magnet = thread.magnet_uris.find(m => (m || '').toLowerCase().includes(item.infohash));
+      const resp = await rd.addAndSelect(magnet || '');
       if (resp && resp.id) success++;
     }
-    res.json({ message: `RD caching triggered for ${success}/${thread.magnet_uris.length} magnet(s).` });
+
+    res.json({ message: `RD caching triggered for ${success}/${targets.length} selected stream(s).` });
   } catch (error) {
     logger.error(error, 'rd-cache-pending failed');
     res.status(500).json({ message: 'Error triggering RD cache.' });

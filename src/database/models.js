@@ -79,6 +79,12 @@ module.exports = (sequelize) => {
         reason: DataTypes.STRING,
         last_attempt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, { tableName: 'failed_threads', timestamps: false, indexes: [{ fields: ['last_attempt'] }] });
-    
-    return { Thread, TmdbMetadata, Stream, FailedThread, RdTorrent };
+
+    // New: lock table for RD cache to avoid duplicates
+    const RdCacheLock = sequelize.define('RdCacheLock', {
+        infohash: { type: DataTypes.STRING, primaryKey: true },
+        createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    }, { tableName: 'rd_cache_locks', timestamps: false });
+
+    return { Thread, TmdbMetadata, Stream, FailedThread, RdTorrent, RdCacheLock };
 };

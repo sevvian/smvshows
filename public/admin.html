@@ -1,404 +1,315 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stremio Addon Admin</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; padding: 20px; background-color: #f4f4f4; color: #333; }
-        .container { max-width: 1200px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        h1, h2 { color: #5a5a5a; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 40px; }
-        .card { padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
-        .stat { font-size: 2em; font-weight: bold; color: #007bff; }
-        button { background-color: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 1em; margin-right: 10px; }
-        button:hover { background-color: #0056b3; }
-        button.secondary { background-color: #6c757d; }
-        button.secondary:hover { background-color: #5a6268; }
-        button.warning { background-color: #ffc107; color: black; }
-        button.warning:hover { background-color: #e0a800; }
-        #pending-list { list-style-type: none; padding: 0; max-height: 400px; overflow-y: auto; }
-        #pending-list li { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; word-break: break-all; }
-        #pending-list li:hover, #pending-list li.selected { background-color: #f0f8ff; }
-        textarea, input { width: 95%; padding: 8px; margin-top: 5px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #ccc; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #ddd; }
-        th { background-color: #007bff; color: white; }
-        tr:nth-child(even) { background-color: #f2f2f2; }
-        hr { margin: 20px 0; }
-        .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 10px; }
-        .status-item { padding: 10px; border: 1px solid #eee; border-radius: 6px; background: #fafafa; }
-        .muted { color: #666; font-size: 0.9em; }
-        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; margin-left: 6px; }
-        .ok { background: #e6f4ea; color: #137333; }
-        .warn { background: #fef7e0; color: #a36f00; }
-        .danger { background: #fce8e6; color: #a50e0e; }
-        .row-actions { white-space: nowrap; }
-        .flex { display: flex; gap: 8px; align-items: center; }
-        .pagination { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Stremio Addon Admin</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; padding: 20px; background-color: #f4f4f4; color: #333; }
+    .container { max-width: 1200px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+    h1, h2 { color: #5a5a5a; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 40px; }
+    .card { padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+    .stat { font-size: 2em; font-weight: bold; color: #007bff; }
+    button { background-color: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 1em; margin-right: 10px; }
+    button:hover { background-color: #0056b3; }
+    button.secondary { background-color: #6c757d; }
+    button.secondary:hover { background-color: #5a6268; }
+    button.warning { background-color: #ffc107; color: black; }
+    button.warning:hover { background-color: #e0a800; }
+    #pending-list { list-style-type: none; padding: 0; max-height: 400px; overflow-y: auto; }
+    #pending-list li { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; word-break: break-all; }
+    #pending-list li:hover, #pending-list li.selected { background-color: #f0f8ff; }
+    textarea, input { width: 95%; padding: 8px; margin-top: 5px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #ccc; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { text-align: left; padding: 12px; border-bottom: 1px solid #ddd; }
+    th { background-color: #007bff; color: white; }
+    tr:nth-child(even) { background-color: #f2f2f2; }
+    hr { margin: 20px 0; }
+    .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 10px; }
+    .status-item { padding: 10px; border: 1px solid #eee; border-radius: 6px; background: #fafafa; }
+    .muted { color: #666; font-size: 0.9em; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; margin-left: 6px; }
+    .ok { background: #e6f4ea; color: #137333; }
+    .warn { background: #fef7e0; color: #a36f00; }
+    .danger { background: #fce8e6; color: #a50e0e; }
+    .row-actions { white-space: nowrap; }
+    .flex { display: flex; gap: 8px; align-items: center; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 0.8em; }
+    .pill.locked { background: #fff3cd; color: #7a5c00; }
+    .streams-box { max-height: 260px; overflow-y: auto; border: 1px solid #eee; border-radius: 6px; padding: 8px; }
+    .streams-row { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-bottom: 1px solid #f0f0f0; }
+    .streams-row:last-child { border-bottom: none; }
+    .streams-row.locked { background: #fffdf2; }
+    .streams-row.selected { outline: 2px solid #007bff; background: #f0f8ff; }
+    .rd-list { list-style: none; padding-left: 0; max-height: 260px; overflow-y: auto; }
+    .rd-list li { padding: 6px 8px; border-bottom: 1px solid #eee; }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Stremio Addon Admin</h1>
+  <div class="container">
+    <h1>Stremio Addon Admin</h1>
 
-        <div class="card">
-            <h2>Status</h2>
-            <div class="status-grid">
-                <div class="status-item"><strong>Workflow running:</strong> <span id="st-is-crawling">-</span></div>
-                <div class="status-item"><strong>Last workflow update:</strong> <span id="st-last-updated">-</span> <span id="st-cache-age" class="badge">-</span></div>
-                <div class="status-item"><strong>RD enabled:</strong> <span id="st-rd">-</span></div>
-                <div class="status-item"><strong>TMDB configured:</strong> <span id="st-tmdb">-</span></div>
-                <div class="status-item"><strong>Tracker count:</strong> <span id="st-trackers">-</span></div>
-                <div class="status-item"><strong>DB size:</strong> <span id="st-db">-</span></div>
-            </div>
-            <p class="muted">Health endpoint provides a quick snapshot. Use the Actions below to trigger a manual crawl.</p>
-        </div>
-
-        <div class="grid">
-            <div class="card">
-                <h2>Dashboard</h2>
-                <p>Total Linked Series: <span id="total-linked" class="stat">0</span></p>
-                <p>Pending TMDB Match: <span id="total-pending" class="stat">0</span></p>
-                <p>Critical Parse Failures: <span id="total-failed" class="stat">0</span></p>
-            </div>
-            <div class="card">
-                <h2>Actions</h2>
-                <button id="trigger-crawl">Trigger Manual Crawl</button>
-                <p id="action-status" style="margin-top: 10px; font-weight: bold;"></p>
-            </div>
-        </div>
-
-        <h2 style="margin-top: 40px;">Edit & Rescue Pending Series</h2>
-        <div class="grid">
-            <div class="card">
-                <h3>1. Select a Pending Title</h3>
-                <ul id="pending-list"></ul>
-            </div>
-            <div class="card">
-                <h3>2. Edit Metadata or Link Official ID</h3>
-                <form id="edit-form">
-                    <p><strong>Selected Title:</strong> <span id="selected-title">None</span></p>
-                    <input type="hidden" id="thread-id-input">
-                    
-                    <label for="custom-poster">Custom Poster URL:</label>
-                    <input type="url" id="custom-poster" placeholder="https://i.imgur.com/poster.png">
-                    
-                    <label for="custom-description">Custom Description:</label>
-                    <textarea id="custom-description" rows="4" placeholder="A short description of the new series..."></textarea>
-                    
-                    <div class="flex">
-                        <button type="button" id="update-pending-btn" class="secondary">Save & Keep Pending</button>
-                        <button type="button" id="rd-cache-btn" class="warning">Cache in RD</button>
-                    </div>
-                    <hr>
-
-                    <label for="manual-id">Link with Official IMDb ID (tt...) or TMDB ID (tv:...):</label>
-                    <input type="text" id="manual-id" placeholder="e.g., tt8111088 or tv:94997">
-                    
-                    <button type="button" id="link-official-btn">Link Official ID</button>
-                </form>
-            </div>
-        </div>
-
-        <h2 style="margin-top: 40px;">Correct a Mislinked Item</h2>
-        <div class="card">
-            <form id="correction-form">
-                <p>This tool re-links a Thread and its Streams from an incorrect IMDb ID to the correct one.</p>
-                
-                <label for="current-imdb-id">Current (Incorrect) IMDb ID:</label>
-                <input type="text" id="current-imdb-id" placeholder="e.g., tt1234567 (the wrong movie)">
-
-                <label for="correct-id">New (Correct) IMDb or TMDB ID:</label>
-                <input type="text" id="correct-id" placeholder="e.g., tt7654321 or movie:12345">
-                
-                <button type="button" id="correct-link-btn" class="warning">Correct Link</button>
-            </form>
-        </div>
-
-        <h2 style="margin-top: 40px;">Recent Activity</h2>
-        <div class="card">
-            <div class="flex">
-                <strong>Linked (paginated):</strong>
-                <button id="rl-prev" class="secondary">Prev</button>
-                <span id="rl-page">1</span>
-                <button id="rl-next" class="secondary">Next</button>
-            </div>
-            <table id="recent-table">
-                <thead>
-                    <tr>
-                        <th>Type</th>
-                        <th>Title / Reason</th>
-                        <th>When</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
-        </div>
-
-        <h2 style="margin-top: 40px;">Critical Parse Failures</h2>
-        <div class="card">
-            <table id="failures-table">
-                <thead><tr><th>Failed Title</th><th>Reason</th><th>Last Attempt</th><th>Actions</th></tr></thead>
-                <tbody></tbody>
-            </table>
-        </div>
+    <div class="card">
+      <h2>Status</h2>
+      <div class="status-grid">
+        <div class="status-item"><strong>Workflow running:</strong> <span id="st-is-crawling">-</span></div>
+        <div class="status-item"><strong>Last workflow update:</strong> <span id="st-last-updated">-</span> <span id="st-cache-age" class="badge">-</span></div>
+        <div class="status-item"><strong>RD enabled:</strong> <span id="st-rd">-</span></div>
+        <div class="status-item"><strong>TMDB configured:</strong> <span id="st-tmdb">-</span></div>
+        <div class="status-item"><strong>Tracker count:</strong> <span id="st-trackers">-</span></div>
+        <div class="status-item"><strong>DB size:</strong> <span id="st-db">-</span></div>
+      </div>
+      <p class="muted">Health endpoint provides a quick snapshot. Use the Actions below to trigger a manual crawl.</p>
     </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Dashboard</h2>
+        <p>Total Linked Series: <span id="total-linked" class="stat">0</span></p>
+        <p>Pending TMDB Match: <span id="total-pending" class="stat">0</span></p>
+        <p>Critical Parse Failures: <span id="total-failed" class="stat">0</span></p>
+      </div>
+      <div class="card">
+        <h2>Actions</h2>
+        <button id="trigger-crawl">Trigger Manual Crawl</button>
+        <p id="action-status" style="margin-top: 10px; font-weight: bold;"></p>
+      </div>
+    </div>
+
+    <h2 style="margin-top: 40px;">Edit & Rescue Pending Series</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>1. Select a Pending Title</h3>
+        <ul id="pending-list"></ul>
+      </div>
+      <div class="card">
+        <h3>2. Edit Metadata or Link Official ID</h3>
+        <form id="edit-form">
+          <p><strong>Selected Title:</strong> <span id="selected-title">None</span></p>
+          <input type="hidden" id="thread-id-input">
+          
+          <label for="custom-poster">Custom Poster URL:</label>
+          <input type="url" id="custom-poster" placeholder="https://i.imgur.com/poster.png">
+          
+          <label for="custom-description">Custom Description:</label>
+          <textarea id="custom-description" rows="4" placeholder="A short description of the new series..."></textarea>
+          
+          <div class="flex">
+            <button type="button" id="update-pending-btn" class="secondary">Save & Keep Pending</button>
+            <button type="button" id="rd-cache-btn" class="warning">Cache Selected in RD</button>
+          </div>
+          <hr>
+
+          <label for="manual-id">Link with Official IMDb ID (tt...) or TMDB ID (tv:...):</label>
+          <input type="text" id="manual-id" placeholder="e.g., tt8111088 or tv:94997">
+          
+          <button type="button" id="link-official-btn">Link Official ID</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top: 20px;">
+      <div class="card">
+        <h3>3. Streams for Selected Pending Item</h3>
+        <div id="streams-box" class="streams-box"></div>
+      </div>
+      <div class="card">
+        <h3>RD Cache Initiated</h3>
+        <ul id="rd-initiated-list" class="rd-list"></ul>
+        <p class="muted">Items listed here have at least one stream already sent to RD cache.</p>
+      </div>
+    </div>
+
+    <h2 style="margin-top: 40px;">Correct a Mislinked Item</h2>
+    <div class="card">
+      <form id="correction-form">
+        <p>This tool re-links a Thread and its Streams from an incorrect IMDb ID to the correct one.</p>
+        
+        <label for="current-imdb-id">Current (Incorrect) IMDb ID:</label>
+        <input type="text" id="current-imdb-id" placeholder="e.g., tt1234567 (the wrong movie)">
+
+        <label for="correct-id">New (Correct) IMDb or TMDB ID:</label>
+        <input type="text" id="correct-id" placeholder="e.g., tt7654321 or movie:12345">
+        
+        <button type="button" id="correct-link-btn" class="warning">Correct Link</button>
+      </form>
+    </div>
+
+    <h2 style="margin-top: 40px;">Recent Activity</h2>
+    <div class="card">
+      <div class="flex">
+        <strong>Linked (paginated):</strong>
+        <button id="rl-prev" class="secondary">Prev</button>
+        <span id="rl-page">1</span>
+        <button id="rl-next" class="secondary">Next</button>
+      </div>
+      <table id="recent-table">
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Title / Reason</th>
+            <th>When</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <h2 style="margin-top: 40px;">Critical Parse Failures</h2>
+    <div class="card">
+      <table id="failures-table">
+        <thead><tr><th>Failed Title</th><th>Reason</th><th>Last Attempt</th><th>Actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-    const apiBase = '/admin/api'; 
-    const ui = {
-        totalLinked: document.getElementById('total-linked'),
-        totalPending: document.getElementById('total-pending'),
-        totalFailed: document.getElementById('total-failed'),
-        pendingList: document.getElementById('pending-list'),
-        failuresTableBody: document.querySelector('#failures-table tbody'),
-        actionStatus: document.getElementById('action-status'),
-        triggerCrawlBtn: document.getElementById('trigger-crawl'),
-        selectedTitle: document.getElementById('selected-title'),
-        threadIdInput: document.getElementById('thread-id-input'),
-        customPosterInput: document.getElementById('custom-poster'),
-        customDescriptionInput: document.getElementById('custom-description'),
-        manualIdInput: document.getElementById('manual-id'),
-        updatePendingBtn: document.getElementById('update-pending-btn'),
-        rdCacheBtn: document.getElementById('rd-cache-btn'),
-        linkOfficialBtn: document.getElementById('link-official-btn'),
-        correctionForm: document.getElementById('correction-form'),
-        currentImdbIdInput: document.getElementById('current-imdb-id'),
-        correctIdInput: document.getElementById('correct-id'),
-        correctLinkBtn: document.getElementById('correct-link-btn'),
-        status: {
-            isCrawling: document.getElementById('st-is-crawling'),
-            lastUpdated: document.getElementById('st-last-updated'),
-            rd: document.getElementById('st-rd'),
-            tmdb: document.getElementById('st-tmdb'),
-            trackers: document.getElementById('st-trackers'),
-            db: document.getElementById('st-db'),
-            cacheAge: document.getElementById('st-cache-age'),
-        },
-        recentTableBody: document.querySelector('#recent-table tbody'),
-        rlPrev: document.getElementById('rl-prev'),
-        rlNext: document.getElementById('rl-next'),
-        rlPage: document.getElementById('rl-page'),
-    };
-    let currentPendingData = [];
-    let rlState = { page: 1, limit: 15, total: 0 };
+  const apiBase = '/admin/api'; 
+  const ui = {
+    totalLinked: document.getElementById('total-linked'),
+    totalPending: document.getElementById('total-pending'),
+    totalFailed: document.getElementById('total-failed'),
+    pendingList: document.getElementById('pending-list'),
+    failuresTableBody: document.querySelector('#failures-table tbody'),
+    actionStatus: document.getElementById('action-status'),
+    triggerCrawlBtn: document.getElementById('trigger-crawl'),
+    selectedTitle: document.getElementById('selected-title'),
+    threadIdInput: document.getElementById('thread-id-input'),
+    customPosterInput: document.getElementById('custom-poster'),
+    customDescriptionInput: document.getElementById('custom-description'),
+    manualIdInput: document.getElementById('manual-id'),
+    updatePendingBtn: document.getElementById('update-pending-btn'),
+    rdCacheBtn: document.getElementById('rd-cache-btn'),
+    linkOfficialBtn: document.getElementById('link-official-btn'),
+    status: {
+      isCrawling: document.getElementById('st-is-crawling'),
+      lastUpdated: document.getElementById('st-last-updated'),
+      rd: document.getElementById('st-rd'),
+      tmdb: document.getElementById('st-tmdb'),
+      trackers: document.getElementById('st-trackers'),
+      db: document.getElementById('st-db'),
+      cacheAge: document.getElementById('st-cache-age'),
+    },
+    recentTableBody: document.querySelector('#recent-table tbody'),
+    rlPrev: document.getElementById('rl-prev'),
+    rlNext: document.getElementById('rl-next'),
+    rlPage: document.getElementById('rl-page'),
+    streamsBox: document.getElementById('streams-box'),
+    rdInitiatedList: document.getElementById('rd-initiated-list'),
+  };
 
-    const showStatus = (message, isError = false) => {
-        ui.actionStatus.textContent = message || '';
-        ui.actionStatus.style.color = isError ? 'red' : 'green';
-        if (message) setTimeout(() => ui.actionStatus.textContent = '', 7000);
-    };
+  let currentPendingData = [];
+  let rlState = { page: 1, limit: 15, total: 0 };
+  let currentStreams = { items: [], locked: [] };
+  let selectedInfohash = null;
+  let rdInitiatedThreads = new Set();
 
-    async function fetchData(endpoint) {
-        try {
-            const response = await fetch(`${apiBase}${endpoint}`);
-            if (!response.ok) {
-                showStatus(`Failed to fetch ${endpoint}`, true);
-                return null;
-            }
-            return await response.json();
-        } catch (e) {
-            showStatus(`Error fetching ${endpoint}`, true);
-            return null;
-        }
-    }
+  const showStatus = (message, isError = false) => {
+    ui.actionStatus.textContent = message || '';
+    ui.actionStatus.style.color = isError ? 'red' : 'green';
+    if (message) setTimeout(() => ui.actionStatus.textContent = '', 7000);
+  };
 
-    async function postData(endpoint, body) {
-        try {
-            const response = await fetch(`${apiBase}${endpoint}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body || {})
-            });
-            const data = await response.json().catch(() => ({}));
-            showStatus(data.message || (response.ok ? 'Success' : 'Failed'), !response.ok);
-            return { ok: response.ok, data };
-        } catch (e) {
-            showStatus(`Error posting ${endpoint}`, true);
-            return { ok: false, data: null };
-        }
-    }
+  async function fetchData(endpoint) {
+    const res = await fetch(`${apiBase}${endpoint}`).catch(()Great idea — we’ll add UI feedback for RD caching (stream selection, lock badges, initiated list) and enforce a backend lock so the same infohash can’t be sent twice.
 
-    function msToBadge(ms) {
-        if (ms == null) return { text: '-', cls: 'warn' };
-        const mins = Math.round(ms / 60000);
-        if (mins <= 10) return { text: `${mins}m fresh`, cls: 'ok' };
-        if (mins <= 60) return { text: `${mins}m`, cls: 'warn' };
-        return { text: `${mins}m stale`, cls: 'danger' };
-    }
+What will change
+- Backend: add a small RdCacheLock table, expose a streams endpoint for a pending thread, and update rd-cache-pending to accept a single infohash and skip duplicates.
+- Admin UI: when selecting a pending item, show its streams (quality/language/episode), allow choosing one, send only that infohash for RD, mark locked streams, and list items with RD initiated.
 
-    function renderHealth(health) {
-        if (!health) return;
-        ui.status.isCrawling.textContent = health.isCrawling ? 'Yes' : 'No';
-        ui.status.lastUpdated.textContent = health.lastUpdated ? new Date(health.lastUpdated).toLocaleString() : '-';
-        ui.status.rd.textContent = health.realDebridEnabled ? 'Yes' : 'No';
-        ui.status.tmdb.textContent = health.tmdbConfigured ? 'Yes' : 'No';
-        ui.status.trackers.textContent = health.trackerCount ?? '-';
-        ui.status.db.textContent = health.dbSizeBytes != null ? (Math.round(health.dbSizeBytes / 1024 / 1024 * 10) / 10) + ' MB' : '-';
+I’ll make the minimal, focused changes now.
 
-        const badge = msToBadge(health.cacheAges?.dashboardMs ?? null);
-        ui.status.cacheAge.textContent = badge.text;
-        ui.status.cacheAge.className = `badge ${badge.cls}`;
-    }
+<dyad-write path="src/database/models.js" description="Add RdCacheLock model to prevent duplicate RD cache requests.">
+const { DataTypes } = require('sequelize');
 
-    function renderRecent(recent) {
-        if (!recent) return;
-        ui.recentTableBody.innerHTML = '';
-        const rows = [];
-        recent.linked.forEach(item => {
-            rows.push(`<tr><td>Linked</td><td>${item.title} (${item.type})</td><td>${new Date(item.updatedAt).toLocaleString()}</td></tr>`);
-        });
-        recent.failures.forEach(item => {
-            rows.push(`<tr><td>Failed</td><td>${item.title} — ${item.reason}</td><td>${new Date(item.last_attempt).toLocaleString()}</td></tr>`);
-        });
-        if (rows.length === 0) {
-            ui.recentTableBody.innerHTML = '<tr><td colspan="3">No recent activity.</td></tr>';
-        } else {
-            ui.recentTableBody.innerHTML = rows.join('');
-        }
-    }
-
-    function renderRecentLinkedPaginated(payload) {
-        if (!payload) return;
-        rlState.total = payload.total;
-        rlState.page = payload.page;
-        ui.rlPage.textContent = String(rlState.page);
-        const head = `<tr><th colspan="3">Linked (page ${payload.page} of ${Math.max(1, Math.ceil(payload.total / rlState.limit))})</th></tr>`;
-        const rows = payload.items.map(item => 
-            `<tr><td>Linked</td><td>${item.title} (${item.type})</td><td>${new Date(item.updatedAt).toLocaleString()}</td></tr>`
-        ).join('');
-        ui.recentTableBody.innerHTML = head + rows;
-    }
-
-    function selectPendingItem(threadId) {
-        const liNodes = ui.pendingList.querySelectorAll('li');
-        liNodes.forEach(li => li.classList.toggle('selected', li.dataset.threadId === String(threadId)));
-        const item = currentPendingData.find(x => String(x.id) === String(threadId));
-        if (!item) return;
-        ui.selectedTitle.textContent = `${item.clean_title}${item.year ? ' (' + item.year + ')' : ''}`;
-        ui.threadIdInput.value = item.id;
-        ui.customPosterInput.value = item.custom_poster || '';
-        ui.customDescriptionInput.value = item.custom_description || '';
-    }
-
-    async function loadAllData() {
-        const [dashboard, pending, failures, health, recent] = await Promise.all([
-            fetchData('/dashboard'),
-            fetchData('/pending'),
-            fetchData('/failures'),
-            fetchData('/health'),
-            fetchData('/recent?limit=15')
-        ]);
-        
-        if (dashboard) {
-            ui.totalLinked.textContent = dashboard.linked;
-            ui.totalPending.textContent = dashboard.pending;
-            ui.totalFailed.textContent = dashboard.failed;
-        }
-
-        if (pending) {
-            currentPendingData = pending;
-            ui.pendingList.innerHTML = '';
-            if (pending.length === 0) {
-                ui.pendingList.innerHTML = '<li>No pending series. Good job!</li>';
-            } else {
-                pending.forEach(thread => {
-                    const li = document.createElement('li');
-                    li.textContent = `${thread.clean_title} (${thread.year || 'N/A'})`;
-                    li.dataset.threadId = thread.id;
-                    li.onclick = () => selectPendingItem(thread.id);
-                    ui.pendingList.appendChild(li);
-                });
-            }
-        }
-        
-        if (failures) {
-            ui.failuresTableBody.innerHTML = '';
-            if (failures.length === 0) {
-                ui.failuresTableBody.innerHTML = '<tr><td colspan="4">No critical failures found.</td></tr>';
-            } else {
-                failures.forEach(failure => {
-                    const tr = document.createElement('tr');
-                    const tdTitle = document.createElement('td');
-                    const tdReason = document.createElement('td');
-                    const tdWhen = document.createElement('td');
-                    const tdActions = document.createElement('td');
-                    tdTitle.textContent = failure.raw_title || '-';
-                    tdReason.textContent = failure.reason || '-';
-                    tdWhen.textContent = failure.last_attempt ? new Date(failure.last_attempt).toLocaleString() : '-';
-                    tdActions.className = 'row-actions';
-                    const retryBtn = document.createElement('button');
-                    retryBtn.className = 'secondary';
-                    retryBtn.textContent = 'Retry';
-                    retryBtn.onclick = async () => {
-                        await postData('/retry-parse', { threadHash: failure.thread_hash });
-                        loadAllData();
-                    };
-                    tdActions.appendChild(retryBtn);
-                    tr.appendChild(tdTitle);
-                    tr.appendChild(tdReason);
-                    tr.appendChild(tdWhen);
-                    tr.appendChild(tdActions);
-                    ui.failuresTableBody.appendChild(tr);
-                });
-            }
-        }
-
-        renderHealth(health);
-        renderRecent(recent);
-    }
-
-    // Button handlers
-    ui.triggerCrawlBtn.addEventListener('click', async () => {
-        await postData('/trigger-crawl', {});
+module.exports = (sequelize) => {
+    const Thread = sequelize.define('Thread', {
+        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+        thread_hash: { type: DataTypes.STRING, unique: true, allowNull: false },
+        raw_title: { type: DataTypes.STRING, allowNull: false },
+        clean_title: DataTypes.STRING,
+        year: DataTypes.INTEGER,
+        tmdb_id: { type: DataTypes.STRING, references: { model: 'tmdb_metadata', key: 'tmdb_id' }, allowNull: true },
+        status: { type: DataTypes.STRING, defaultValue: 'linked', allowNull: false },
+        type: { type: DataTypes.STRING, allowNull: false, defaultValue: 'series' },
+        postedAt: { type: DataTypes.DATE, allowNull: true },
+        catalog: { type: DataTypes.STRING, allowNull: true },
+        magnet_uris: { type: DataTypes.JSON, allowNull: true },
+        custom_poster: { type: DataTypes.STRING, allowNull: true },
+        custom_description: { type: DataTypes.TEXT, allowNull: true },
+        last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    }, { 
+        tableName: 'threads', 
+        timestamps: true,
+        indexes: [
+            { fields: ['status'] },
+            { fields: ['type'] },
+            { fields: ['catalog'] },
+            { fields: ['postedAt'] },
+            { fields: ['tmdb_id'] },
+            { unique: true, fields: ['thread_hash'] },
+        ]
     });
 
-    ui.updatePendingBtn.addEventListener('click', async () => {
-        const threadId = ui.threadIdInput.value;
-        if (!threadId) return showStatus('Select a pending item first.', true);
-        await postData('/update-pending', {
-            threadId,
-            poster: ui.customPosterInput.value || null,
-            description: ui.customDescriptionInput.value || null
-        });
-        loadAllData();
+    const TmdbMetadata = sequelize.define('TmdbMetadata', {
+        tmdb_id: { type: DataTypes.STRING, primaryKey: true },
+        imdb_id: { type: DataTypes.STRING, unique: true },
+        year: { type: DataTypes.INTEGER, index: true },
+        data: { type: DataTypes.JSON, allowNull: false },
+    }, { 
+        tableName: 'tmdb_metadata', 
+        timestamps: true,
+        indexes: [
+            { unique: true, fields: ['imdb_id'] },
+            { fields: ['year'] },
+        ]
+    });
+    
+    const Stream = sequelize.define('Stream', {
+        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+        tmdb_id: { type: DataTypes.STRING, allowNull: false },
+        season: { type: DataTypes.INTEGER, allowNull: true },
+        episode: { type: DataTypes.INTEGER, allowNull: true },
+        episode_end: { type: DataTypes.INTEGER, allowNull: true },
+        infohash: { type: DataTypes.STRING, allowNull: false, unique: true },
+        quality: DataTypes.STRING,
+        language: DataTypes.STRING,
+    }, { 
+        tableName: 'streams', 
+        timestamps: true,
+        indexes: [
+            { unique: true, fields: ['tmdb_id', 'season', 'episode', 'infohash'] },
+            { fields: ['tmdb_id'] },
+            { fields: ['season'] },
+            { fields: ['episode'] },
+            { fields: ['quality'] },
+        ]
     });
 
-    ui.rdCacheBtn.addEventListener('click', async () => {
-        const threadId = ui.threadIdInput.value;
-        if (!threadId) return showStatus('Select a pending item first.', true);
-        await postData('/rd-cache-pending', { threadId });
-    });
+    const RdTorrent = sequelize.define('RdTorrent', {
+        infohash: { type: DataTypes.STRING, primaryKey: true },
+        rd_id: { type: DataTypes.STRING, allowNull: false, unique: true },
+        status: { type: DataTypes.STRING, allowNull: false },
+        files: { type: DataTypes.JSON, allowNull: true },
+        links: { type: DataTypes.JSON, allowNull: true },
+        last_checked: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    }, { tableName: 'rd_torrents', timestamps: true });
 
-    ui.linkOfficialBtn.addEventListener('click', async () => {
-        const threadId = ui.threadIdInput.value;
-        const manualId = ui.manualIdInput.value.trim();
-        if (!threadId || !manualId) return showStatus('Select a pending item and enter an ID.', true);
-        const res = await postData('/link-official', { threadId, manualId });
-        if (res.ok) {
-            ui.manualIdInput.value = '';
-            loadAllData();
-        }
-    });
+    const FailedThread = sequelize.define('FailedThread', {
+        thread_hash: { type: DataTypes.STRING, primaryKey: true },
+        raw_title: DataTypes.STRING,
+        reason: DataTypes.STRING,
+        last_attempt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    }, { tableName: 'failed_threads', timestamps: false, indexes: [{ fields: ['last_attempt'] }] });
+    
+    // NEW: lock table to prevent sending the same infohash to RD multiple times
+    const RdCacheLock = sequelize.define('RdCacheLock', {
+        infohash: { type: DataTypes.STRING, primaryKey: true },
+        createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    }, { tableName: 'rd_cache_locks', timestamps: false });
 
-    ui.rlPrev.addEventListener('click', async () => {
-        if (rlState.page <= 1) return;
-        const page = rlState.page - 1;
-        const payload = await fetchData(`/recent/linked?page=${page}&limit=${rlState.limit}`);
-        renderRecentLinkedPaginated(payload);
-    });
-    ui.rlNext.addEventListener('click', async () => {
-        const max = Math.max(1, Math.ceil(rlState.total / rlState.limit));
-        if (rlState.page >= max) return;
-        const page = rlState.page + 1;
-        const payload = await fetchData(`/recent/linked?page=${page}&limit=${rlState.limit}`);
-        renderRecentLinkedPaginated(payload);
-    });
-
-    loadAllData();
-});
-</script>
-</body>
-</html>
+    return { Thread, TmdbMetadata, Stream, FailedThread, RdTorrent, RdCacheLock };
+};
