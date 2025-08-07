@@ -385,4 +385,64 @@ router.post('/rd-cache-pending', async (req, res) => {
   }
 });
 
+// NEW: Check if a torrent exists on RD by infohash and sync local DB/locks
+router.post('/rd-check', async (req, res) => {
+  if (!rd.isEnabled) return res.status(400).json({ message: 'Real-Debrid is not enabled.' });
+  const { infohash, threadId } = req.body || {};
+  if (!infohash) return res.status(400).json({ message: 'infohash is required.' });
+
+  try {
+    // If already locked locally, treat as found
+    const lockedLocal = await models.RdCacheLock.findByPk(infohash);
+    if (lockedLocal) {
+      return res.json({ found: true, updatedLocal: false });
+    }
+
+    // Try to see if we have a downloaded torrent record
+    const rdTorrent = await models.RdTorrent.findByPk(infohash);
+    if (rdTorrent && rdTorrent.status === 'downloaded') {
+      await models.RdCacheLock.upsert({ infohash, createdAt: new Date() });
+      return res.json({ found: true, updatedLocal: true });
+    }
+
+    // As we don't have a direct RD search by hash in our service, we attempt a no-op flow:
+    // If threadId is provided, ensure the magnet for that infohash exists in its magnet_uris
+    if (!threadId) {
+      return res.json({ found: false, updatedLocal: false });
+    }
+    const thread = await models.Thread.findByPk(threadId);
+    if (!thread || !Array.isArray(thread.magnet_uris)) {
+      return res.json({ found: false, updatedLocal: false });
+    }
+    const magnet = thread.magnet_uris.find(m => (m || '').toLowerCase().includes(infohash));
+    if (!magnet) {
+      return res.json({ found: false, updatedLocal: false });
+    }
+
+    // Try add & select; if RD says resource exists/selected, it will reflect on subsequent info calls.
+    const added = await rd.addAndSelect(magnet);
+    if (added && added.id) {
+      await models.RdCacheLock.upsert({ infohash, createdAt: new Date() });
+      // Try fetch info immediately and store a minimal snapshot
+      try {
+        const info = await rd.getTorrentInfo(added.id);
+        await models.RdTorrent.upsert({
+          infohash,
+          rd_id: added.id,
+          status: info?.status || 'unknown',
+          files: info?.files || null,
+          links: info?.links || null,
+          last_checked: new Date(),
+        });
+      } catch (_) {}
+      return res.json({ found: true, updatedLocal: true });
+    }
+
+    return res.json({ found: false, updatedLocal: false });
+  } catch (error) {
+    logger.error(error, 'rd-check failed');
+    res.status(500).json({ message: 'Error checking RD.', error: error?.message });
+  }
+});
+
 module.exports = router;
