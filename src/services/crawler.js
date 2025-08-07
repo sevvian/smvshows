@@ -1,4 +1,3 @@
-// src/services/crawler.js
 const {
   CheerioCrawler,
   log,
@@ -136,16 +135,20 @@ async function handleListPage({ $, crawler, request }) {
       'No detail page links found on list page. The page structure might have changed.',
       { url: request.url }
     );
-    try {
-      const debugDir = path.join('/data', 'debug');
-      await fs.mkdir(debugDir, { recursive: true });
-      const sanitizedUrl = request.url.replace(/[^a-zA-Z0-9]/g, '_');
-      const filename = `${new Date().toISOString()}_${sanitizedUrl}.html`;
-      const filePath = path.join(debugDir, filename);
-      await fs.writeFile(filePath, $.html());
-      log.info(`Saved HTML of failed page to: ${filePath}`);
-    } catch (e) {
-      log.error('Failed to save debug HTML file.', { error: e.message });
+    // Save debug HTML only when logger level is debug
+    const level = (logger && logger.level) ? logger.level : 'info';
+    if (level === 'debug') {
+      try {
+        const debugDir = path.join('/data', 'debug');
+        await fs.mkdir(debugDir, { recursive: true });
+        const sanitizedUrl = request.url.replace(/[^a-zA-Z0-9]/g, '_');
+        const filename = `${new Date().toISOString()}_${sanitizedUrl}.html`;
+        const filePath = path.join(debugDir, filename);
+        await fs.writeFile(filePath, $.html());
+        log.debug(`Saved HTML of failed page to: ${filePath}`);
+      } catch (e) {
+        log.debug('Failed to save debug HTML file.', { error: e.message });
+      }
     }
   }
 }
