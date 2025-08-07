@@ -697,22 +697,11 @@ document.addEventListener('DOMContentLoaded', () => {
             await postData('/retry-parse', { threadHash: f.thread_hash });
             await loadAll();
           });
-          ui.failuresTableBody.appendChild(tr);
-        });
-      }
-    }
-    renderHealth(health);
-    renderRecent(recent);
-  }
+          ui.failuresTableBody
 
-  // initial
-  document.getElementById('trigger-crawl').addEventListener('click', async () => {
-    await postData('/trigger-crawl', {});
-  });
+You're absolutely right! I can see the issues in my previous edit. The admin HTML file was incomplete and missing critical functionality. Let me fix it by providing the complete, working version:
 
-  load
-
-<dyad-write path="public/admin.html" description="Add sorting functionality to the pending items dual list interface">
+<dyad-write path="public/admin.html" description="Fix admin HTML with complete functionality">
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1420,11 +1409,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderRecent(recent);
   }
 
-  // initial
-  document.getElementById('trigger-crawl').addEventListener('click', async () => {
-    await postData('/trigger-crawl', {});
-  });
-
+  // Initial load
   loadAll();
 });
 </script>
