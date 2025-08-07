@@ -1,4 +1,3 @@
-// src/config/config.js
 require('dotenv').config();
 
 const config = {
@@ -31,10 +30,8 @@ const config = {
     scraperTimeoutSecs: parseInt(process.env.SCRAPER_TIMEOUT_SECS, 10) || 30,
     scraperUserAgent: process.env.SCRAPER_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
 
-    // --- START OF FIX R12 ---
     // Scheduler Configuration
     mainWorkflowCron: process.env.MAIN_WORKFLOW_CRON || '0 */6 * * *', // Defaults to every 6 hours
-    // --- END OF FIX R12 ---
 
     // TMDB API Key
     tmdbApiKey: process.env.TMDB_API_KEY,
@@ -55,6 +52,10 @@ const config = {
     trackerUrl: process.env.TRACKER_URL || "https://ngosang.github.io/trackerslist/trackers_best.txt",
     
     appHost: process.env.APP_HOST || 'http://127.0.0.1:3000',
+
+    // NEW: Optional forum-level sort query appended to all forum list URLs
+    // Example: "sortby=last_post&sortdirection=desc"
+    forumSortQuery: (process.env.FORUM_SORT_QUERY || '').trim(),
 };
 
 // Add boolean flags for easy checking

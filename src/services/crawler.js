@@ -19,13 +19,23 @@ const generateThreadHash = (title, magnetUris) => {
   return crypto.createHash('sha256').update(data).digest('hex');
 };
 
+function appendQuery(urlStr, extraQuery) {
+  if (!extraQuery) return urlStr;
+  try {
+    // Handle possible trailing slashes and potential existing query
+    const hasQuery = urlStr.includes('?');
+    const sep = hasQuery ? '&' : '?';
+    return `${urlStr}${sep}${extraQuery}`;
+  } catch (_) {
+    return urlStr;
+  }
+}
+
 /* ---------- crawler factory ---------- */
 const createCrawler = (crawledData) =>
   new CheerioCrawler({
-    // ---------- STATELESS GUARANTEES ----------
-    useSessionPool: false, // no session state
+    useSessionPool: false,
     persistCookiesPerSession: false,
-    // ---------- /STATELESS GUARANTEES ----------
 
     navigationTimeoutSecs: config.scraperTimeoutSecs,
     maxConcurrency: config.scraperConcurrency,
@@ -189,14 +199,11 @@ async function handleDetailPage({ $, request }, crawledData) {
 const runCrawler = async () => {
   /* 🔥 FORCE COMPLETE STATE RESET 🔥 */
   try {
-    // 1. Wipe every default storage (queues, datasets, KVS, sessions).
     logger.info('Purging default storages to ensure a fresh crawl...');
     await purgeDefaultStorages();
 
-    // 2. Disable persistent storage entirely for this process.
     Configuration.getGlobalConfig().set('persistStorage', false);
 
-    // 3. Optional breathing room for FS flush.
     await new Promise((r) => setTimeout(r, 500));
   } catch (err) {
     logger.warn('Non-fatal purge warning:', err.message);
@@ -207,21 +214,17 @@ const runCrawler = async () => {
 
   /* ---------- build start requests (always fresh) ---------- */
   const startRequests = [];
-  const runTimestamp = Date.now(); // guarantees new uniqueKey every run
+  const runTimestamp = Date.now();
 
   const addScrapeTasks = (urls, type, catalogId) => {
     urls.forEach((baseUrl) => {
       const cleanBaseUrl = baseUrl.replace(/\/$/, '');
-      for (
-        let i = config.scrapeStartPage;
-        i <= config.scrapeEndPage;
-        i++
-      ) {
-        const url = i === 1 ? cleanBaseUrl : `${cleanBaseUrl}/page/${i}`;
+      for (let i = config.scrapeStartPage; i <= config.scrapeEndPage; i++) {
+        const base = i === 1 ? cleanBaseUrl : `${cleanBaseUrl}/page/${i}`;
+        const withSort = appendQuery(base, config.forumSortQuery);
         startRequests.push({
-          url,
-          // 👇 uniqueKey changes every run → crawler treats as new
-          uniqueKey: `${url}-${runTimestamp}`,
+          url: withSort,
+          uniqueKey: `${withSort}-${runTimestamp}`,
           label: 'LIST',
           userData: { type, catalogId },
         });
@@ -240,6 +243,7 @@ const runCrawler = async () => {
       config.seriesForumUrls.length +
       config.movieForumUrls.length +
       config.dubbedMovieForumUrls.length,
+    hasForumSortQuery: !!config.forumSortQuery,
   };
 
   if (config.isProxyEnabled) {
