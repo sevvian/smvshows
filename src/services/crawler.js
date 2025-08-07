@@ -22,10 +22,20 @@ const generateThreadHash = (title, magnetUris) => {
 function appendQuery(urlStr, extraQuery) {
   if (!extraQuery) return urlStr;
   try {
-    // Handle possible trailing slashes and potential existing query
-    const hasQuery = urlStr.includes('?');
-    const sep = hasQuery ? '&' : '?';
-    return `${urlStr}${sep}${extraQuery}`;
+    // Handle IPS-style routing where base contains "index.php?/"
+    const isIpsStyle = urlStr.includes('index.php?/');
+    // If classic query exists, always use &
+    if (urlStr.includes('?') && !isIpsStyle) {
+      return `${urlStr}&${extraQuery}`;
+    }
+    // If IPS-style, append with & even if there's no extra '?'
+    if (isIpsStyle) {
+      // Ensure trailing slash consistency before &
+      const sep = urlStr.endsWith('/') ? '' : '/';
+      return `${urlStr}${sep}&${extraQuery}`;
+    }
+    // Fallback: normal behavior – first param uses ?
+    return `${urlStr}${urlStr.includes('?') ? '&' : '?'}${extraQuery}`;
   } catch (_) {
     return urlStr;
   }
