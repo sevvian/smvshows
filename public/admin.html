@@ -89,7 +89,10 @@
       <h3>1. Pick Pending Items</h3>
       <div class="dual">
         <div>
-          <h4>Available</h4>
+          <div class="flex" style="justify-content: space-between; align-items: center; padding-right: 6px;">
+            <h4>Available</h4>
+            <button id="sort-pending-btn" class="ghost" title="Sort alphabetically" style="padding: 4px 8px; font-size: 0.9em;">A-Z ↓</button>
+          </div>
           <div id="pending-available" class="listbox"></div>
         </div>
         <div class="list-actions">
@@ -247,6 +250,7 @@ document.addEventListener('DOMContentLoaded', () => {
     moveAllRightBtn: document.getElementById('move-all-right'),
     clearRightBtn: document.getElementById('clear-right'),
     focusBtn: document.getElementById('focus-item'),
+    sortPendingBtn: document.getElementById('sort-pending-btn'),
   };
 
   let allPending = [];
@@ -254,6 +258,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let focusedItem = null;
   let rlState = { page: 1, limit: 15, total: 0 };
   let streamState = { items: [], locked: new Set(), selectedInfohash: null };
+  let pendingSortOrder = 'desc'; // 'asc' or 'desc' for alphabetical title sort
 
   function showStatus(message, isError = false) {
     ui.actionStatus.textContent = message || '';
@@ -322,6 +327,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const available = allPending.filter(p => !selectedIds.has(p.id));
     const selected = allPending.filter(p => selectedIds.has(p.id));
 
+    // Sort the 'available' list based on the current sort order
+    available.sort((a, b) => {
+        const titleA = (a.clean_title || '').toLowerCase();
+        const titleB = (b.clean_title || '').toLowerCase();
+        if (pendingSortOrder === 'asc') {
+            return titleA.localeCompare(titleB);
+        } else {
+            return titleB.localeCompare(titleA);
+        }
+    });
+
     available.forEach(t => {
       const div = document.createElement('div');
       div.className = 'list-item';
@@ -342,7 +358,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function getSelectedIds(boxEl) {
     return Array.from(boxEl.querySelectorAll('.list-item.selected')).map(el => parseInt(el.dataset.id, 10));
-    }
+  }
 
   // Move buttons
   ui.moveRightBtn.addEventListener('click', () => {
@@ -361,6 +377,13 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   ui.clearRightBtn.addEventListener('click', () => {
     selectedIds.clear();
+    renderDualLists();
+  });
+
+  // Sort button
+  ui.sortPendingBtn.addEventListener('click', () => {
+    pendingSortOrder = pendingSortOrder === 'asc' ? 'desc' : 'asc';
+    ui.sortPendingBtn.textContent = pendingSortOrder === 'asc' ? 'A-Z ↓' : 'Z-A ↑';
     renderDualLists();
   });
 
