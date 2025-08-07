@@ -256,36 +256,51 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
     if (cached && isNonTerminal(cached.status)) {
       if (!lock) await models.RdCacheLock.upsert({ infohash, createdAt: new Date() });
     } else if (!lock) {
-      // Acquire lock and attempt add
+      // Acquire lock and attempt to add to RD
       await models.RdCacheLock.upsert({ infohash, createdAt: new Date() });
 
-      // Add (probe), then select files after a short wait
-      try {
-        if (!rdId) {
+      let torrentAddedViaMagnet = false;
+      if (!rdId) {
+        try {
           const addResp = await rd.addMagnet(magnet);
           rdId = addResp?.id || null;
+          if (rdId) {
+            // Immediately save the new torrent info so concurrent requests can find it
+            await models.RdTorrent.upsert({
+              infohash,
+              rd_id: rdId,
+              status: 'queued',
+              last_checked: new Date()
+            });
+            torrentAddedViaMagnet = true;
+          }
+        } catch (e) {
+          logger.warn({ infohash, err: e?.message }, 'RD addMagnet failed; trying addAndSelect as fallback.');
         }
-      } catch (e) {
-        logger.warn({ infohash, err: e?.message }, 'RD addMagnet failed; trying addAndSelect as fallback.');
       }
 
+      // Fallback to addAndSelect if addMagnet failed
       if (!rdId) {
-        // addAndSelect also selects files, but we still normalize with a select below
         const resp = await rd.addAndSelect(magnet);
         if (resp && resp.id) {
           rdId = resp.id;
+          // This also selects files, so we can just upsert the full snapshot
           await upsertRdSnapshot(infohash, rdId, resp);
         }
       }
 
-      if (rdId) {
-        // Wait a moment then select all files to initiate download
+      // If we added via addMagnet, we still need to select files to start the download
+      if (torrentAddedViaMagnet && rdId) {
         await delay(3000);
         try { await rd.selectFiles(rdId, 'all'); } catch (_) {}
       }
-    } else {
-      // Locked by someone else; try to find rdId from snapshot
-      rdId = rdId || (await models.RdTorrent.findByPk(infohash))?.rd_id || rdId;
+    }
+
+    // For concurrent requests that arrive after the lock is acquired by another process
+    if (!rdId) {
+      // Try to fetch it again from the DB, as the first request might have just saved it.
+      const freshCache = await models.RdTorrent.findByPk(infohash);
+      rdId = freshCache?.rd_id || null;
     }
 
     if (!rdId) {
