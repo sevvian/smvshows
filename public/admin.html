@@ -17,6 +17,7 @@
     button.secondary:hover { background-color: #5a6268; }
     button.warning { background-color: #ffc107; color: black; }
     button.warning:hover { background-color: #e0a800; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
     #pending-list { list-style-type: none; padding: 0; max-height: 400px; overflow-y: auto; }
     #pending-list li { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; word-break: break-all; }
     #pending-list li:hover, #pending-list li.selected { background-color: #f0f8ff; }
@@ -36,6 +37,16 @@
     .row-actions { white-space: nowrap; }
     .flex { display: flex; gap: 8px; align-items: center; }
     .pagination { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+    /* Streams selector */
+    .streams-container { border: 1px solid #eee; border-radius: 6px; background: #fafafa; max-height: 280px; overflow: auto; padding: 8px; }
+    .stream-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #eee; }
+    .stream-row:last-child { border-bottom: none; }
+    .stream-row.locked { background: #fef7e0; }
+    .stream-info { flex: 1; }
+    .stream-title { font-weight: 600; }
+    .stream-sub { font-size: 0.9em; color: #555; }
+    .rd-initiated-list { margin-top: 8px; font-size: 0.9em; color: #333; }
+    .rd-initiated-list li { margin-left: 18px; }
   </style>
 </head>
 <body>
@@ -89,7 +100,6 @@
           
           <div class="flex">
             <button type="button" id="update-pending-btn" class="secondary">Save & Keep Pending</button>
-            <button type="button" id="rd-cache-btn" class="warning">Cache in RD</button>
           </div>
           <hr>
 
@@ -98,6 +108,19 @@
           
           <button type="button" id="link-official-btn">Link Official ID</button>
         </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>3. Choose a Stream to Cache in Real-Debrid</h3>
+      <p class="muted">Select exactly one stream. Already-initiated streams are marked and disabled.</p>
+      <div id="streams-section" class="streams-container"></div>
+      <div class="flex" style="margin-top: 10px;">
+        <button id="rd-cache-selected-btn" class="warning" disabled>Cache selected in RD</button>
+      </div>
+      <div id="rd-initiated-wrapper" style="margin-top: 10px; display:none;">
+        <strong>RD initiated for this item:</strong>
+        <ul id="rd-initiated-list" class="rd-initiated-list"></ul>
       </div>
     </div>
 
@@ -162,8 +185,11 @@ document.addEventListener('DOMContentLoaded', () => {
     customDescriptionInput: document.getElementById('custom-description'),
     manualIdInput: document.getElementById('manual-id'),
     updatePendingBtn: document.getElementById('update-pending-btn'),
-    rdCacheBtn: document.getElementById('rd-cache-btn'),
     linkOfficialBtn: document.getElementById('link-official-btn'),
+    rdCacheSelectedBtn: document.getElementById('rd-cache-selected-btn'),
+    streamsSection: document.getElementById('streams-section'),
+    rdInitiatedWrapper: document.getElementById('rd-initiated-wrapper'),
+    rdInitiatedList: document.getElementById('rd-initiated-list'),
     currentImdbIdInput: document.getElementById('current-imdb-id'),
     correctIdInput: document.getElementById('correct-id'),
     correctLinkBtn: document.getElementById('correct-link-btn'),
@@ -184,6 +210,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let currentPendingData = [];
   let rlState = { page: 1, limit: 15, total: 0 };
+  let streamState = { items: [], locked: new Set(), selectedInfohash: null };
 
   function showStatus(message, isError = false) {
     ui.actionStatus.textContent = message || '';
@@ -273,8 +300,110 @@ document.addEventListener('DOMContentLoaded', () => {
     ui.threadIdInput.value = item.id;
     ui.customPosterInput.value = item.custom_poster || '';
     ui.customDescriptionInput.value = item.custom_description || '';
+    loadStreamsForPending(item.id);
   }
 
+  // Streams UI
+  function renderStreamsUI() {
+    const { items, locked, selectedInfohash } = streamState;
+    ui.streamsSection.innerHTML = '';
+    ui.rdInitiatedList.innerHTML = '';
+    ui.rdInitiatedWrapper.style.display = 'none';
+
+    if (!items || items.length === 0) {
+      ui.streamsSection.innerHTML = '<div class="muted">No streams detected for this item.</div>';
+      ui.rdCacheSelectedBtn.disabled = true;
+      return;
+    }
+
+    const initiated = [];
+    items.forEach((it, idx) => {
+      const isLocked = locked.has(it.infohash);
+      const row = document.createElement('div');
+      row.className = 'stream-row' + (isLocked ? ' locked' : '');
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'stream-select';
+      radio.value = it.infohash;
+      radio.disabled = isLocked;
+      radio.checked = !isLocked && selectedInfohash === it.infohash;
+
+      radio.addEventListener('change', () => {
+        streamState.selectedInfohash = it.infohash;
+        updateCacheButtonState();
+      });
+
+      const info = document.createElement('div');
+      info.className = 'stream-info';
+
+      const title = document.createElement('div');
+      title.className = 'stream-title';
+      const quality = it.quality || 'SD';
+      const lang = it.language ? ` • ${it.language}` : '';
+      if (it.type === 'MOVIE') {
+        title.textContent = `${quality}${lang}`;
+      } else {
+        let epStr = '';
+        if (it.type === 'SEASON_PACK') epStr = 'Season Pack';
+        else if (it.type === 'EPISODE_PACK') epStr = `E${it.episodeStart}-${it.episodeEnd}`;
+        else epStr = `E${it.episode}`;
+        title.textContent = `S${String(it.season).padStart(2,'0')} ${epStr} • ${quality}${lang}`;
+      }
+
+      const sub = document.createElement('div');
+      sub.className = 'stream-sub';
+      sub.textContent = it.infohash;
+
+      info.appendChild(title);
+      info.appendChild(sub);
+
+      const badge = document.createElement('span');
+      if (isLocked) {
+        badge.className = 'badge warn';
+        badge.textContent = 'RD initiated';
+        initiated.push(`${title.textContent}`);
+      } else if (selectedInfohash === it.infohash) {
+        badge.className = 'badge ok';
+        badge.textContent = 'Selected';
+      }
+
+      row.appendChild(radio);
+      row.appendChild(info);
+      if (badge.textContent) row.appendChild(badge);
+      ui.streamsSection.appendChild(row);
+    });
+
+    if (initiated.length > 0) {
+      ui.rdInitiatedWrapper.style.display = 'block';
+      ui.rdInitiatedList.innerHTML = initiated.map(t => `<li>${t}</li>`).join('');
+    }
+
+    updateCacheButtonState();
+  }
+
+  function updateCacheButtonState() {
+    const canCache = streamState.selectedInfohash && !streamState.locked.has(streamState.selectedInfohash);
+    ui.rdCacheSelectedBtn.disabled = !canCache;
+  }
+
+  async function loadStreamsForPending(threadId) {
+    streamState = { items: [], locked: new Set(), selectedInfohash: null };
+    renderStreamsUI();
+    const payload = await fetchData(`/pending/${threadId}/streams`);
+    if (!payload) {
+      return;
+    }
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    const locked = new Set(Array.isArray(payload.locked) ? payload.locked : []);
+    streamState.items = items;
+    streamState.locked = locked;
+    // Auto-select the first unlocked stream to streamline the flow
+    const firstUnlocked = items.find(i => !locked.has(i.infohash));
+    streamState.selectedInfohash = firstUnlocked ? firstUnlocked.infohash : null;
+    renderStreamsUI();
+  }
+
+  // Initial load
   async function loadAllData() {
     const [dashboard, pending, failures, health, recent] = await Promise.all([
       fetchData('/dashboard'),
@@ -361,10 +490,18 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAllData();
   });
 
-  ui.rdCacheBtn.addEventListener('click', async () => {
+  ui.rdCacheSelectedBtn.addEventListener('click', async () => {
     const threadId = ui.threadIdInput.value;
+    const infohash = streamState.selectedInfohash;
     if (!threadId) return showStatus('Select a pending item first.', true);
-    await postData('/rd-cache-pending', { threadId });
+    if (!infohash) return showStatus('Select a stream to cache.', true);
+    if (streamState.locked.has(infohash)) return showStatus('This stream is already initiated for RD.', true);
+
+    const res = await postData('/rd-cache-pending', { threadId, infohash });
+    if (res.ok) {
+      // Refresh locks immediately so UI shows the initiated state
+      await loadStreamsForPending(threadId);
+    }
   });
 
   ui.linkOfficialBtn.addEventListener('click', async () => {
@@ -375,6 +512,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (res.ok) {
       ui.manualIdInput.value = '';
       loadAllData();
+      // Clear streams panel since item is no longer pending
+      ui.streamsSection.innerHTML = '';
+      ui.rdInitiatedList.innerHTML = '';
+      ui.rdInitiatedWrapper.style.display = 'none';
+      ui.rdCacheSelectedBtn.disabled = true;
     }
   });
 
