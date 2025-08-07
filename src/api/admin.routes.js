@@ -144,11 +144,15 @@ router.post('/link-official', async (req, res) => {
     thread.status = 'linked';
 
     const streamsToCreate = [];
+    const magnetPairs = [];
     const magnetUris = thread.magnet_uris || [];
 
     for (const magnet_uri of magnetUris) {
       const parsed = parser.parseMagnet(magnet_uri, thread.type);
       if (!parsed) continue;
+
+      // cache magnet for linked use
+      magnetPairs.push({ infohash: parsed.infohash, magnet: magnet_uri });
 
       if (thread.type === 'series') {
         const entry = {
@@ -188,6 +192,11 @@ router.post('/link-official', async (req, res) => {
 
     if (streamsToCreate.length > 0) {
       await crud.createStreams(streamsToCreate);
+    }
+    if (magnetPairs.length > 0) {
+      for (const mp of magnetPairs) {
+        await models.MagnetCache.upsert({ infohash: mp.infohash.toLowerCase(), magnet: mp.magnet, createdAt: new Date() });
+      }
     }
 
     thread.magnet_uris = null;
@@ -373,21 +382,17 @@ router.post('/rd-cache-pending', async (req, res) => {
         continue;
       }
 
-      // 2) Probe Real-Debrid for existing torrent by using addMagnet (RD deduplicates and returns existing id)
       let rdId = null;
       try {
         const addResp = await rd.addMagnet(item.magnet);
         rdId = addResp?.id || null;
       } catch (e) {
-        // If RD rejects in a way that indicates already exists, we still try to continue without failing the whole loop
         logger.warn({ infohash: item.infohash, err: e?.message }, 'RD addMagnet probe returned error; will proceed conservatively.');
       }
 
       if (rdId) {
-        // We have an RD torrent id (either existing or newly created). Fetch info and persist
         try {
           const info = await rd.getTorrentInfo(rdId);
-          // Persist RdTorrent snapshot
           await models.RdTorrent.upsert({
             infohash: item.infohash,
             rd_id: rdId,
@@ -396,22 +401,17 @@ router.post('/rd-cache-pending', async (req, res) => {
             links: info?.links || null,
             last_checked: new Date()
           });
-          // Lock it locally
           await models.RdCacheLock.upsert({ infohash: item.infohash, createdAt: new Date() });
           lockedCount++;
-          // If we just created a brand-new torrent, select files; if it already existed, selectFiles will no-op or 202
           try { await rd.selectFiles(rdId, 'all'); newlyAdded++; } catch (_) {}
           continue;
         } catch (e) {
           logger.warn({ infohash: item.infohash, rdId, err: e?.message }, 'Failed to fetch RD torrent info after addMagnet probe.');
-          // Fall through to try normal add below only if we have clear signal we didn't create anything
         }
       }
 
-      // 3) If no rdId discovered by probe, proceed with add-and-select as a true add path
       const resp = await rd.addAndSelect(item.magnet);
       if (resp && resp.id) {
-        // Persist RdTorrent snapshot
         await models.RdTorrent.upsert({
           infohash: item.infohash,
           rd_id: resp.id,
@@ -420,7 +420,6 @@ router.post('/rd-cache-pending', async (req, res) => {
           links: resp?.links || null,
           last_checked: new Date()
         });
-        // Lock locally
         await models.RdCacheLock.upsert({ infohash: item.infohash, createdAt: new Date() });
         lockedCount++;
         newlyAdded++;
@@ -441,20 +440,17 @@ router.post('/rd-check', async (req, res) => {
   if (!infohash) return res.status(400).json({ message: 'infohash is required.' });
 
   try {
-    // If already locked locally, treat as found
     const lockedLocal = await models.RdCacheLock.findByPk(infohash);
     if (lockedLocal) {
       return res.json({ found: true, updatedLocal: false });
     }
 
-    // Try to see if we have a downloaded torrent record
     const rdTorrent = await models.RdTorrent.findByPk(infohash);
     if (rdTorrent && rdTorrent.status === 'downloaded') {
       await models.RdCacheLock.upsert({ infohash, createdAt: new Date() });
       return res.json({ found: true, updatedLocal: true });
     }
 
-    // No remote call here to avoid creating duplicates during check
     return res.json({ found: false, updatedLocal: false });
   } catch (error) {
     logger.error(error, 'rd-check failed');

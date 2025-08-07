@@ -86,5 +86,12 @@ module.exports = (sequelize) => {
         createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, { tableName: 'rd_cache_locks', timestamps: false });
 
-    return { Thread, TmdbMetadata, Stream, FailedThread, RdTorrent, RdCacheLock };
+    // New: Magnet cache for linked items (infohash -> magnet)
+    const MagnetCache = sequelize.define('MagnetCache', {
+        infohash: { type: DataTypes.STRING, primaryKey: true },
+        magnet: { type: DataTypes.TEXT, allowNull: false },
+        createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    }, { tableName: 'magnet_cache', timestamps: false });
+
+    return { Thread, TmdbMetadata, Stream, FailedThread, RdTorrent, RdCacheLock, MagnetCache };
 };

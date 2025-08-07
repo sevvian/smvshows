@@ -1,4 +1,3 @@
-// src/services/orchestrator.js
 const { runCrawler } = require('./crawler');
 const parser = require('./parser');
 const metadata = require('./metadata');
@@ -63,11 +62,7 @@ const runFullWorkflow = async () => {
                 continue;
             }
 
-            // --- START OF FIX R13 ---
-            // Pass the known 'type' ('movie' or 'series') to the metadata lookup function
-            // to ensure it uses the correct, type-specific TMDB endpoint.
             const tmdbData = await metadata.getTmdbMetadata(parsedTitle.clean_title, parsedTitle.year, type);
-            // --- END OF FIX R13 ---
             
             const t = await sequelize.transaction();
             try {
@@ -82,9 +77,13 @@ const runFullWorkflow = async () => {
                     }, { transaction: t });
 
                     const streamsToCreate = [];
+                    const magnetPairs = []; // {infohash, magnet}
                     for (const magnet_uri of magnet_uris) {
                         const streamDetails = parser.parseMagnet(magnet_uri, type); 
                         if (streamDetails) {
+                            // cache magnet for linked items
+                            magnetPairs.push({ infohash: streamDetails.infohash, magnet: magnet_uri });
+
                             let streamEntry = {
                                 tmdb_id: dbEntry.tmdb_id,
                                 infohash: streamDetails.infohash,
@@ -114,6 +113,11 @@ const runFullWorkflow = async () => {
                     if (streamsToCreate.length > 0) {
                         await models.Stream.bulkCreate(streamsToCreate, { ignoreDuplicates: true, transaction: t });
                         logger.info(`Upserted ${streamsToCreate.length} stream entries for ${parsedTitle.clean_title}`);
+                    }
+                    if (magnetPairs.length > 0) {
+                        for (const mp of magnetPairs) {
+                            await models.MagnetCache.upsert({ infohash: mp.infohash.toLowerCase(), magnet: mp.magnet, createdAt: new Date() }, { transaction: t });
+                        }
                     }
                 } else {
                     logger.warn(`No TMDB match for "${parsedTitle.clean_title}". Saving as 'pending_tmdb'.`);
