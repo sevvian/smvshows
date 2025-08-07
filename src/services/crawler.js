@@ -19,23 +19,15 @@ const generateThreadHash = (title, magnetUris) => {
   return crypto.createHash('sha256').update(data).digest('hex');
 };
 
+// Just append whatever is passed in extraQuery, assuming the caller
+// provides the correct leading character(s) (e.g., "&sort=...").
+// We only ensure there is exactly one slash before appending when needed.
 function appendQuery(urlStr, extraQuery) {
   if (!extraQuery) return urlStr;
   try {
-    // Handle IPS-style routing where base contains "index.php?/"
-    const isIpsStyle = urlStr.includes('index.php?/');
-    // If classic query exists, always use &
-    if (urlStr.includes('?') && !isIpsStyle) {
-      return `${urlStr}&${extraQuery}`;
-    }
-    // If IPS-style, append with & even if there's no extra '?'
-    if (isIpsStyle) {
-      // Ensure trailing slash consistency before &
-      const sep = urlStr.endsWith('/') ? '' : '/';
-      return `${urlStr}${sep}&${extraQuery}`;
-    }
-    // Fallback: normal behavior – first param uses ?
-    return `${urlStr}${urlStr.includes('?') ? '&' : '?'}${extraQuery}`;
+    const hasTrailingSlash = urlStr.endsWith('/');
+    const needsSlash = !hasTrailingSlash && (extraQuery.startsWith('&') || extraQuery.startsWith('?'));
+    return needsSlash ? `${urlStr}/${extraQuery}` : `${urlStr}${extraQuery}`;
   } catch (_) {
     return urlStr;
   }
