@@ -324,11 +324,12 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderDualLists() {
     ui.availableBox.innerHTML = '';
     ui.selectedBox.innerHTML = '';
-    const available = allPending.filter(p => !selectedIds.has(p.id));
-    const selected = allPending.filter(p => selectedIds.has(p.id));
 
-    // Sort the 'available' list based on the current sort order
-    available.sort((a, b) => {
+    const availableItems = allPending.filter(p => !selectedIds.has(p.id));
+    const selectedItems = allPending.filter(p => selectedIds.has(p.id));
+
+    // Create a sorted copy for rendering, ensuring the original data is untouched.
+    const sortedAvailable = [...availableItems].sort((a, b) => {
         const titleA = (a.clean_title || '').toLowerCase();
         const titleB = (b.clean_title || '').toLowerCase();
         if (pendingSortOrder === 'asc') {
@@ -338,7 +339,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    available.forEach(t => {
+    sortedAvailable.forEach(t => {
       const div = document.createElement('div');
       div.className = 'list-item';
       div.dataset.id = t.id;
@@ -346,7 +347,8 @@ document.addEventListener('DOMContentLoaded', () => {
       div.addEventListener('click', () => div.classList.toggle('selected'));
       ui.availableBox.appendChild(div);
     });
-    selected.forEach(t => {
+    
+    selectedItems.forEach(t => {
       const div = document.createElement('div');
       div.className = 'list-item';
       div.dataset.id = t.id;
