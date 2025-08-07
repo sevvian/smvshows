@@ -206,7 +206,18 @@ router.get('/meta/:type/:id.json', async (req, res) => {
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-// RD on-demand for LINKED ITEMS: single-flight add/select/poll and 302 when ready
+function isNonTerminal(status) {
+  return [
+    'waiting_files_selection',
+    'queued',
+    'downloading',
+    'magnet_conversion',
+    'compressing',
+    'uploading'
+  ].includes((status || '').toLowerCase());
+}
+
+// RD on-demand for LINKED ITEMS: single-flight add/select/poll with re-add on 404
 router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
   if (!rd.isEnabled) {
     return res.status(400).json({ message: 'Real-Debrid is not enabled.' });
@@ -220,25 +231,16 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
     if (cached && Array.isArray(cached.files) && Array.isArray(cached.links) && cached.links.length > 0) {
       const link = await pickAndUnrestrict(cached, requestedEpisode);
       if (link) return redirectTo(res, link);
-      // refresh once if needed
-      if (cached.rd_id) {
-        const info = await safeGetTorrentInfo(cached.rd_id);
-        if (info) {
-          await upsertRdSnapshot(infohash, cached.rd_id, info);
-          const l2 = await pickAndUnrestrict(info, requestedEpisode);
-          if (l2) return redirectTo(res, l2);
-        }
-      }
     }
 
-    // Ensure this infohash is part of our linked catalog (has a Stream row)
+    // Ensure this infohash is indexed
     const streamRow = await models.Stream.findOne({ where: { infohash } });
     if (!streamRow) {
       logger.warn({ infohash }, 'No Stream record for infohash (not indexed).');
       return res.status(503).json({ message: 'Stream not indexed yet. Retry shortly.' });
     }
 
-    // Get the magnet from MagnetCache (authoritative for LINKED)
+    // Fetch magnet from MagnetCache (authoritative)
     const magnetRow = await models.MagnetCache.findByPk(infohash);
     if (!magnetRow || !magnetRow.magnet) {
       logger.warn({ infohash }, 'Magnet missing in MagnetCache for linked item.');
@@ -246,35 +248,43 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
     }
     const magnet = magnetRow.magnet;
 
-    // Single-flight guarantee: acquire or check local lock
-    let lock = await models.RdCacheLock.findByPk(infohash);
+    // Determine rdId/add necessity respecting single-flight lock and local status
     let rdId = cached?.rd_id || null;
+    let lock = await models.RdCacheLock.findByPk(infohash);
 
-    if (!lock) {
-      // Lock now to prevent other concurrent add attempts
+    // If we have a cached non-terminal state, ensure lock and skip add
+    if (cached && isNonTerminal(cached.status)) {
+      if (!lock) await models.RdCacheLock.upsert({ infohash, createdAt: new Date() });
+    } else if (!lock) {
+      // Acquire lock and attempt add
       await models.RdCacheLock.upsert({ infohash, createdAt: new Date() });
-      lock = { infohash };
-      // Add/select only once
+
+      // Add (probe), then select files after a short wait
       try {
         if (!rdId) {
-          const added = await rd.addMagnet(magnet);
-          rdId = added?.id || null;
+          const addResp = await rd.addMagnet(magnet);
+          rdId = addResp?.id || null;
         }
       } catch (e) {
-        logger.warn({ infohash, err: e?.message }, 'RD addMagnet failed; trying addAndSelect.');
+        logger.warn({ infohash, err: e?.message }, 'RD addMagnet failed; trying addAndSelect as fallback.');
       }
+
       if (!rdId) {
+        // addAndSelect also selects files, but we still normalize with a select below
         const resp = await rd.addAndSelect(magnet);
         if (resp && resp.id) {
           rdId = resp.id;
           await upsertRdSnapshot(infohash, rdId, resp);
         }
       }
+
       if (rdId) {
+        // Wait a moment then select all files to initiate download
+        await delay(3000);
         try { await rd.selectFiles(rdId, 'all'); } catch (_) {}
       }
     } else {
-      // Another request already initiated adding; rely on polling path below
+      // Locked by someone else; try to find rdId from snapshot
       rdId = rdId || (await models.RdTorrent.findByPk(infohash))?.rd_id || rdId;
     }
 
@@ -282,22 +292,57 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
       return res.status(503).json({ message: 'RD torrent not created yet. Retry shortly.' });
     }
 
-    // Poll Real-Debrid for up to 3 minutes with 3s cadence
+    // Poll up to 3 minutes with 3s interval; re-add once on 404
     const deadline = Date.now() + 3 * 60 * 1000;
+    let readded = false;
+
     while (Date.now() < deadline) {
       await delay(3000);
-      const info = await safeGetTorrentInfo(rdId);
-      if (!info) continue;
 
+      let info = null;
+      try {
+        info = await rd.getTorrentInfo(rdId);
+      } catch (e) {
+        // If RD says resource not found, re-add once during this session
+        const is404 = e && e.name === 'ResourceNotFoundError';
+        if (is404 && !readded) {
+          logger.warn({ infohash, rd_id: rdId }, 'RD 404 detected during poll; re-adding once.');
+          // Attempt re-add and select
+          let newId = null;
+          try {
+            const addResp = await rd.addMagnet(magnet);
+            newId = addResp?.id || null;
+          } catch (_) {}
+          if (!newId) {
+            const resp = await rd.addAndSelect(magnet);
+            if (resp && resp.id) {
+              newId = resp.id;
+              await upsertRdSnapshot(infohash, newId, resp);
+            }
+          }
+          if (newId) {
+            rdId = newId;
+            await delay(3000);
+            try { await rd.selectFiles(rdId, 'all'); } catch (_) {}
+            readded = true;
+            continue; // next poll cycle
+          }
+        }
+        // On other errors, continue polling; Stremio will retry if we time out
+        continue;
+      }
+
+      // Persist snapshot
       await upsertRdSnapshot(infohash, rdId, info);
 
-      if (Array.isArray(info.files) && Array.isArray(info.links) && info.links.length > 0) {
+      // When links/files ready, unrestrict and redirect
+      if (Array.isArray(info.files) && Array.isArray(info.links) && info.links.length > 0 && (info.status || '').toLowerCase() === 'downloaded') {
         const link = await pickAndUnrestrict(info, requestedEpisode);
         if (link) return redirectTo(res, link);
       }
     }
 
-    // Not ready within window; let Stremio retry
+    // Timed out; let Stremio retry later
     return res.status(503).json({ message: 'RD still preparing this stream. Please retry shortly.' });
 
   } catch (error) {
@@ -317,7 +362,6 @@ async function upsertRdSnapshot(infohash, rdId, info) {
     links: info?.links || null,
     last_checked: new Date()
   });
-  // Keep lock present to indicate initiation happened; prevents re-adding.
   if (models.RdCacheLock) {
     await models.RdCacheLock.upsert({ infohash, createdAt: new Date() });
   }
