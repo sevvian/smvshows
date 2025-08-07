@@ -206,7 +206,7 @@ router.get('/meta/:type/:id.json', async (req, res) => {
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-// NEW: Handle on-demand RD add/select/poll and return a playable link for LINKED ITEMS
+// RD on-demand for LINKED ITEMS: single-flight add/select/poll and 302 when ready
 router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
   if (!rd.isEnabled) {
     return res.status(400).json({ message: 'Real-Debrid is not enabled.' });
@@ -215,95 +215,90 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
   const requestedEpisode = parseInt(req.params.episode || '1', 10);
 
   try {
-    // 0) Try fast-path: existing cached RD snapshot with files/links
-    let rdTorrent = await models.RdTorrent.findByPk(infohash);
-    if (rdTorrent && rdTorrent.status === 'downloaded' && Array.isArray(rdTorrent.files) && Array.isArray(rdTorrent.links) && rdTorrent.links.length > 0) {
-      const link = await pickAndUnrestrict(rdTorrent, requestedEpisode);
+    // Fast path: local cached RD snapshot with links/files
+    let cached = await models.RdTorrent.findByPk(infohash);
+    if (cached && Array.isArray(cached.files) && Array.isArray(cached.links) && cached.links.length > 0) {
+      const link = await pickAndUnrestrict(cached, requestedEpisode);
       if (link) return redirectTo(res, link);
-      // If file not found yet, continue to try refreshing info from RD
+      // refresh once if needed
+      if (cached.rd_id) {
+        const info = await safeGetTorrentInfo(cached.rd_id);
+        if (info) {
+          await upsertRdSnapshot(infohash, cached.rd_id, info);
+          const l2 = await pickAndUnrestrict(info, requestedEpisode);
+          if (l2) return redirectTo(res, l2);
+        }
+      }
     }
 
-    // 1) Resolve content context (movie/series, season/episode bounds) from DB streams
-    const stream = await models.Stream.findOne({ where: { infohash } });
-    if (!stream) {
-      logger.warn({ infohash }, 'No Stream record found for infohash.');
+    // Ensure this infohash is part of our linked catalog (has a Stream row)
+    const streamRow = await models.Stream.findOne({ where: { infohash } });
+    if (!streamRow) {
+      logger.warn({ infohash }, 'No Stream record for infohash (not indexed).');
       return res.status(503).json({ message: 'Stream not indexed yet. Retry shortly.' });
     }
-    const tmdbMeta = await models.TmdbMetadata.findByPk(stream.tmdb_id);
-    const data = tmdbMeta ? (typeof tmdbMeta.data === 'string' ? JSON.parse(tmdbMeta.data) : tmdbMeta.data) : null;
-    const isSeries = !!(stream.season != null);
 
-    // 2) If we have an RD id already, try to refresh details; else we need to add
-    if (rdTorrent && rdTorrent.rd_id) {
-      const info = await safeGetTorrentInfo(rdTorrent.rd_id);
-      if (info) {
-        await upsertRdSnapshot(infohash, rdTorrent.rd_id, info);
-        const link = await pickAndUnrestrict({ ...rdTorrent, ...info }, requestedEpisode);
-        if (link) return redirectTo(res, link);
+    // Get the magnet from MagnetCache (authoritative for LINKED)
+    const magnetRow = await models.MagnetCache.findByPk(infohash);
+    if (!magnetRow || !magnetRow.magnet) {
+      logger.warn({ infohash }, 'Magnet missing in MagnetCache for linked item.');
+      return res.status(503).json({ message: 'Magnet unavailable. Retry later.' });
+    }
+    const magnet = magnetRow.magnet;
+
+    // Single-flight guarantee: acquire or check local lock
+    let lock = await models.RdCacheLock.findByPk(infohash);
+    let rdId = cached?.rd_id || null;
+
+    if (!lock) {
+      // Lock now to prevent other concurrent add attempts
+      await models.RdCacheLock.upsert({ infohash, createdAt: new Date() });
+      lock = { infohash };
+      // Add/select only once
+      try {
+        if (!rdId) {
+          const added = await rd.addMagnet(magnet);
+          rdId = added?.id || null;
+        }
+      } catch (e) {
+        logger.warn({ infohash, err: e?.message }, 'RD addMagnet failed; trying addAndSelect.');
       }
-    }
-
-    // 3) We need a magnet to add/select. Recover it from historical pending threads
-    const magnet = await findMagnetByInfohash(infohash);
-    if (!magnet) {
-      logger.warn({ infohash }, 'No magnet found for infohash in historical pending threads.');
-      return res.status(503).json({ message: 'Magnet not available yet. Retry in a bit.' });
-    }
-
-    // 4) Add + select (RD dedup will return existing torrent if present)
-    let added = null;
-    try {
-      added = await rd.addMagnet(magnet);
-    } catch (e) {
-      logger.warn({ infohash, err: e?.message }, 'RD addMagnet failed; will attempt conservative continue.');
-    }
-    const rdId = added?.id || rdTorrent?.rd_id || null;
-    if (!rdId) {
-      // as a fallback, try addAndSelect
-      const resp = await rd.addAndSelect(magnet);
-      if (resp && resp.id) {
-        await upsertRdSnapshot(infohash, resp.id, resp);
-        const link = await pickAndUnrestrict(resp, requestedEpisode);
-        if (link) return redirectTo(res, link);
+      if (!rdId) {
+        const resp = await rd.addAndSelect(magnet);
+        if (resp && resp.id) {
+          rdId = resp.id;
+          await upsertRdSnapshot(infohash, rdId, resp);
+        }
+      }
+      if (rdId) {
+        try { await rd.selectFiles(rdId, 'all'); } catch (_) {}
       }
     } else {
-      // Ensure files are selected (no-op or 202 if already selected)
-      try { await rd.selectFiles(rdId, 'all'); } catch (_) {}
+      // Another request already initiated adding; rely on polling path below
+      rdId = rdId || (await models.RdTorrent.findByPk(infohash))?.rd_id || rdId;
     }
 
-    const effectiveRdId = rdId || (await models.RdTorrent.findByPk(infohash))?.rd_id || null;
-    if (!effectiveRdId) {
-      return res.status(503).json({ message: 'RD torrent not created yet. Retry later.' });
+    if (!rdId) {
+      return res.status(503).json({ message: 'RD torrent not created yet. Retry shortly.' });
     }
 
-    // 5) Poll up to 3 minutes for links
+    // Poll Real-Debrid for up to 3 minutes with 3s cadence
     const deadline = Date.now() + 3 * 60 * 1000;
-    let lastInfo = null;
-    let attempt = 0;
     while (Date.now() < deadline) {
-      attempt++;
-      await delay(Math.min(1500 + attempt * 250, 5000)); // progressive backoff 1.5s -> 5s
-      const info = await safeGetTorrentInfo(effectiveRdId);
+      await delay(3000);
+      const info = await safeGetTorrentInfo(rdId);
       if (!info) continue;
 
-      await upsertRdSnapshot(infohash, effectiveRdId, info);
+      await upsertRdSnapshot(infohash, rdId, info);
 
-      // If we have links/files, try to pick and unrestrict
-      if (Array.isArray(info.links) && info.links.length > 0 && Array.isArray(info.files)) {
+      if (Array.isArray(info.files) && Array.isArray(info.links) && info.links.length > 0) {
         const link = await pickAndUnrestrict(info, requestedEpisode);
         if (link) return redirectTo(res, link);
       }
-
-      // status heuristics: if downloaded or content_ready-like states, try again
-      lastInfo = info;
     }
 
-    // Timed out. Let Stremio retry later — use 503, never 404
-    logger.info({ infohash, rd_id: effectiveRdId }, 'RD links not ready within polling window.');
-    return res.status(503).json({
-      message: 'RD still preparing this stream. Please retry shortly.',
-      status: lastInfo?.status || 'unknown'
-    });
+    // Not ready within window; let Stremio retry
+    return res.status(503).json({ message: 'RD still preparing this stream. Please retry shortly.' });
 
   } catch (error) {
     logger.error(error, 'rd-add failed unexpectedly');
@@ -322,7 +317,7 @@ async function upsertRdSnapshot(infohash, rdId, info) {
     links: info?.links || null,
     last_checked: new Date()
   });
-  // lock to indicate initiated
+  // Keep lock present to indicate initiation happened; prevents re-adding.
   if (models.RdCacheLock) {
     await models.RdCacheLock.upsert({ infohash, createdAt: new Date() });
   }
@@ -332,13 +327,11 @@ async function safeGetTorrentInfo(rdId) {
   try {
     return await rd.getTorrentInfo(rdId);
   } catch (e) {
-    // If RD says resource gone, let caller keep polling or fail soft
     return null;
   }
 }
 
 function redirectTo(res, url) {
-  // Stremio handles 302 to a direct media URL
   res.setHeader('Cache-Control', 'no-store');
   res.redirect(302, url);
   return;
@@ -361,11 +354,9 @@ function tryMatchEpisode(files, episode) {
     const f = files[i];
     if (!isVideo(f.path || '')) continue;
 
-    // 1) parse-torrent-title
     const p = ptt.parse(f.path);
     let ep = p.episode;
 
-    // 2) regex fallback
     if (ep === undefined) {
       const re = /S(\d{1,2})\s*(?:E|EP|\s)\s*(\d{1,3})/i;
       const m = f.path.match(re);
@@ -385,8 +376,6 @@ async function pickAndUnrestrict(info, requestedEpisode) {
   let fileToStream = null;
   let linkIndex = -1;
 
-  // If any file already has a matching unrestrictable link index alignment
-  // We rely on RD index alignment: files and links arrays correspond
   if (requestedEpisode && requestedEpisode > 0) {
     const match = tryMatchEpisode(info.files, requestedEpisode);
     if (match) {
@@ -396,11 +385,9 @@ async function pickAndUnrestrict(info, requestedEpisode) {
   }
 
   if (!fileToStream) {
-    // Movie path or fallback: choose largest video
     const largest = pickLargestVideo(info.files);
     if (largest) {
       fileToStream = largest;
-      // find its index among selected files (links align to selected files order)
       const idx = info.files.findIndex(f => f.id === largest.id);
       linkIndex = idx !== -1 ? idx : 0;
     }
@@ -411,29 +398,8 @@ async function pickAndUnrestrict(info, requestedEpisode) {
       const unrestricted = await rd.unrestrictLink(info.links[linkIndex]);
       return unrestricted?.download || null;
     } catch (e) {
-      logger.warn({ err: e?.message }, 'unrestrictLink failed; will let caller continue.');
+      logger.warn({ err: e?.message }, 'unrestrictLink failed.');
       return null;
-    }
-  }
-  return null;
-}
-
-// Recover a magnet by scanning historical pending threads that contained this infohash
-async function findMagnetByInfohash(infohash) {
-  // Look for any pending thread that still keeps magnet_uris having this infohash
-  const candidates = await models.Thread.findAll({
-    where: { status: 'pending_tmdb', magnet_uris: { [Op.not]: null } },
-    order: [['updatedAt', 'DESC']],
-    limit: 200, // cap to keep it efficient
-  });
-
-  for (const t of candidates) {
-    const magnets = Array.isArray(t.magnet_uris) ? t.magnet_uris : [];
-    for (const m of magnets) {
-      const ih = parser.getInfohash(m);
-      if (ih && ih.toLowerCase() === infohash) {
-        return m;
-      }
     }
   }
   return null;
