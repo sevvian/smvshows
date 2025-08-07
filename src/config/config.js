@@ -56,6 +56,10 @@ const config = {
     // NEW: Optional forum-level sort query appended to all forum list URLs
     // Example: "sortby=last_post&sortdirection=desc"
     forumSortQuery: (process.env.FORUM_SORT_QUERY || '').trim(),
+
+    // Database Maintenance Configuration
+    dbAutoVacuumCron: process.env.DB_AUTO_VACUUM_CRON || null, // Cron expression, e.g., '0 3 * * *' for daily at 3 AM
+    dbAutoVacuumEnabled: process.env.DB_AUTO_VACUUM_ENABLED === 'true' || false,
 };
 
 // Add boolean flags for easy checking
