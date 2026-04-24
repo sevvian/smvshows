@@ -74,9 +74,19 @@ router.get('/manifest.json', (req, res) => {
     version: "12.0.0",
     name: config.addonName,
     description: config.addonDescription,
-    resources: ['catalog', 'stream', 'meta'],
+    // FIX: Moving 'meta' to an object definition with its own idPrefixes.
+    // This explicitly tells Stremio NOT to ask this addon for IMDb (tt) metadata.
+    resources: [
+      'catalog',
+      'stream',
+      {
+        name: 'meta',
+        types: ['series', 'movie'],
+        idPrefixes: [config.addonId] // Only trigger meta for our custom pending IDs
+      }
+    ],
     types: ['series', 'movie'],
-    idPrefixes: [config.addonId, 'tt'],
+    idPrefixes: [config.addonId, 'tt'], // Keep 'tt' here so the 'stream' resource still triggers for IMDb items
     catalogs: [
       { type: 'series', id: 'top-series-from-forum', name: 'Tamil Webseries', extra: [{ name: 'skip', isRequired: false }] },
       { type: 'movie', id: 'tamil-hd-movies', name: 'Tamil HD Movies', extra: [{ name: 'skip', isRequired: false }] },
@@ -174,8 +184,11 @@ async function getMovieCatalog(req, res, skip, catalogId) {
 
 router.get('/meta/:type/:id.json', async (req, res) => {
   const { type, id } = req.params;
+
+  // FIX: Safety check. If a request for an official ID somehow reaches this route,
+  // returning an empty meta object forces Stremio to fallback to Cinemeta correctly.
   if ((type !== 'series' && type !== 'movie') || !id.startsWith(config.addonId)) {
-    return res.status(404).json({ err: 'Not Found' });
+    return res.json({ meta: {} });
   }
 
   try {
@@ -184,7 +197,7 @@ router.get('/meta/:type/:id.json', async (req, res) => {
     if (itemType === 'pending') {
       const threadId = parts[2];
       const thread = await models.Thread.findByPk(threadId);
-      if (!thread || thread.status !== 'pending_tmdb') return res.status(404).json({ err: 'Pending item not found' });
+      if (!thread || thread.status !== 'pending_tmdb') return res.json({ meta: {} });
 
       return res.json({
         meta: {
@@ -197,10 +210,10 @@ router.get('/meta/:type/:id.json', async (req, res) => {
         }
       });
     }
-    return res.status(404).json({ err: 'This addon only provides metadata for pending items.' });
+    return res.json({ meta: {} });
   } catch (error) {
     logger.error(error, `Failed to fetch meta for ID: ${id}`);
-    res.status(500).json({ err: 'Internal Server Error' });
+    res.status(500).json({ meta: {} });
   }
 });
 
