@@ -39,7 +39,7 @@ function buildMovieTitle({ tmdbTitle, quality, language }) {
 
 function buildTrackerSources() {
   const trackers = getTrackers();
-  const allowed = [];
+  const allowed =[];
   for (const t of trackers) {
     if (t.startsWith('udp://') || t.startsWith('http://') || t.startsWith('https://')) {
       const proto = t.startsWith('udp://') ? 'udp' : 'http';
@@ -51,14 +51,14 @@ function buildTrackerSources() {
 }
 
 function withDhtSource(sources, infohash) {
-  const list = Array.isArray(sources) ? sources.slice() : [];
+  const list = Array.isArray(sources) ? sources.slice() :[];
   if (infohash) list.push(`dht:${infohash}`);
   return list;
 }
 
 function dedupeStreams(streams) {
   const seen = new Set();
-  const out = [];
+  const out =[];
   for (const s of streams) {
     const key = `${s.isRD ? 'rd' : 'p2p'}|${s.quality || 'SD'}|${(s.language || 'NA').toLowerCase()}|${s.infoHash || s.url || ''}`;
     if (seen.has(key)) continue;
@@ -74,12 +74,21 @@ router.get('/manifest.json', (req, res) => {
     version: "12.0.0",
     name: config.addonName,
     description: config.addonDescription,
-    resources: ['catalog', 'stream', 'meta'],
+    // FIX: Scope the 'meta' resource strictly to your addon's custom IDs to avoid intercepting IMDb requests
+    resources:[
+      'catalog', 
+      'stream', 
+      {
+        name: 'meta',
+        types: ['series', 'movie'],
+        idPrefixes: [config.addonId]
+      }
+    ],
     types: ['series', 'movie'],
-    idPrefixes: [config.addonId, 'tt'],
-    catalogs: [
+    idPrefixes:[config.addonId, 'tt'], // Keeps 'tt' enabled globally so '/stream/series/tt...' works
+    catalogs:[
       { type: 'series', id: 'top-series-from-forum', name: 'Tamil Webseries', extra: [{ name: 'skip', isRequired: false }] },
-      { type: 'movie', id: 'tamil-hd-movies', name: 'Tamil HD Movies', extra: [{ name: 'skip', isRequired: false }] },
+      { type: 'movie', id: 'tamil-hd-movies', name: 'Tamil HD Movies', extra:[{ name: 'skip', isRequired: false }] },
       { type: 'movie', id: 'tamil-dubbed-movies', name: 'Tamil HD Dubbed Movies', extra: [{ name: 'skip', isRequired: false }] }
     ],
     behaviorHints: { configurable: false, adult: false }
@@ -110,8 +119,7 @@ async function getSeriesCatalog(req, res, skip) {
     const allThreads = await models.Thread.findAll({
       where: { type: 'series' },
       include: [{ model: models.TmdbMetadata, required: false }],
-      order: [
-        [sequelize.literal("CASE `Thread`.`status` WHEN 'linked' THEN 0 ELSE 1 END"), 'ASC'],
+      order: [[sequelize.literal("CASE `Thread`.`status` WHEN 'linked' THEN 0 ELSE 1 END"), 'ASC'],
         ['postedAt', 'DESC']
       ],
       offset: skip,
@@ -174,8 +182,15 @@ async function getMovieCatalog(req, res, skip, catalogId) {
 
 router.get('/meta/:type/:id.json', async (req, res) => {
   const { type, id } = req.params;
-  if ((type !== 'series' && type !== 'movie') || !id.startsWith(config.addonId)) {
-    return res.status(404).json({ err: 'Not Found' });
+
+  // FIX: Stremio treats { meta: {} } as a clean "I don't have this, fallback to Cinemeta".
+  // Returning 404 with { err: 'Not Found' } causes some UI rendering issues in Stremio.
+  if (!id.startsWith(config.addonId)) {
+    return res.status(404).json({ meta: {} });
+  }
+
+  if (type !== 'series' && type !== 'movie') {
+    return res.status(404).json({ meta: {} });
   }
 
   try {
@@ -184,7 +199,10 @@ router.get('/meta/:type/:id.json', async (req, res) => {
     if (itemType === 'pending') {
       const threadId = parts[2];
       const thread = await models.Thread.findByPk(threadId);
-      if (!thread || thread.status !== 'pending_tmdb') return res.status(404).json({ err: 'Pending item not found' });
+      
+      if (!thread || thread.status !== 'pending_tmdb') {
+          return res.status(404).json({ meta: {} });
+      }
 
       return res.json({
         meta: {
@@ -197,17 +215,18 @@ router.get('/meta/:type/:id.json', async (req, res) => {
         }
       });
     }
-    return res.status(404).json({ err: 'This addon only provides metadata for pending items.' });
+    
+    return res.status(404).json({ meta: {} });
   } catch (error) {
     logger.error(error, `Failed to fetch meta for ID: ${id}`);
-    res.status(500).json({ err: 'Internal Server Error' });
+    res.status(500).json({ meta: {} });
   }
 });
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function isNonTerminal(status) {
-  return [
+  return[
     'waiting_files_selection',
     'queued',
     'downloading',
@@ -402,7 +421,7 @@ function isVideo(path) {
 }
 
 function pickLargestVideo(files) {
-  const videos = (files || []).filter(f => isVideo(f.path || ''));
+  const videos = (files ||[]).filter(f => isVideo(f.path || ''));
   if (videos.length === 0) return null;
   return videos.reduce((largest, cur) => (cur.bytes > (largest?.bytes || 0) ? cur : largest), null);
 }
@@ -467,11 +486,11 @@ async function pickAndUnrestrict(info, requestedEpisode) {
 router.get('/stream/:type/:id.json', async (req, res) => {
   const { type } = req.params;
   if (type !== 'series' && type !== 'movie') {
-    return res.status(404).json({ streams: [] });
+    return res.status(404).json({ streams:[] });
   }
 
   const requestedId = req.params.id;
-  let finalStreams = [];
+  let finalStreams =[];
   const trackerSources = buildTrackerSources();
 
   try {
@@ -527,7 +546,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
       const parts = requestedId.split(':');
       imdb_id = parts[0];
       if (type === 'series') {
-        if (parts.length < 3) return res.json({ streams: [] });
+        if (parts.length < 3) return res.json({ streams:[] });
         season = parts[1];
         episode = parts[2];
       }
@@ -535,12 +554,12 @@ router.get('/stream/:type/:id.json', async (req, res) => {
 
     if (imdb_id) {
       const meta = await models.TmdbMetadata.findOne({ where: { imdb_id } });
-      if (!meta) return res.json({ streams: [] });
+      if (!meta) return res.json({ streams:[] });
 
       const whereClause = { tmdb_id: meta.tmdb_id };
       if (type === 'series' && season && episode) {
         whereClause.season = season;
-        whereClause.episode = { [Op.lte]: episode };
+        whereClause.episode = {[Op.lte]: episode };
         whereClause.episode_end = { [Op.gte]: episode };
       } else if (type === 'movie') {
         whereClause.season = null;
@@ -665,8 +684,4 @@ router.get('/stream/:type/:id.json', async (req, res) => {
     res.json({ streams: finalStreams });
   } catch (error) {
     logger.error(error, 'Failed to build streams');
-    res.status(500).json({ streams: [] });
-  }
-});
-
-module.exports = router;
+    res.status(500).json({ streams:
