@@ -74,19 +74,19 @@ router.get('/manifest.json', (req, res) => {
     version: "12.0.0",
     name: config.addonName,
     description: config.addonDescription,
-    // INCREMENTAL FIX: Restrict meta resource to addon-specific IDs only.
-    // This prevents the addon from being queried for IMDb (tt...) metadata.
+    // FIX: Moving 'meta' to an object definition with its own idPrefixes.
+    // This explicitly tells Stremio NOT to ask this addon for IMDb (tt) metadata.
     resources: [
-      'catalog', 
-      'stream', 
+      'catalog',
+      'stream',
       {
         name: 'meta',
         types: ['series', 'movie'],
-        idPrefixes: [config.addonId]
+        idPrefixes: [config.addonId] // Only trigger meta for our custom pending IDs
       }
     ],
     types: ['series', 'movie'],
-    idPrefixes: [config.addonId, 'tt'],
+    idPrefixes: [config.addonId, 'tt'], // Keep 'tt' here so the 'stream' resource still triggers for IMDb items
     catalogs: [
       { type: 'series', id: 'top-series-from-forum', name: 'Tamil Webseries', extra: [{ name: 'skip', isRequired: false }] },
       { type: 'movie', id: 'tamil-hd-movies', name: 'Tamil HD Movies', extra: [{ name: 'skip', isRequired: false }] },
@@ -185,9 +185,8 @@ async function getMovieCatalog(req, res, skip, catalogId) {
 router.get('/meta/:type/:id.json', async (req, res) => {
   const { type, id } = req.params;
 
-  // INCREMENTAL FIX: If the ID is an IMDb ID or otherwise not our addon prefix, 
-  // return an empty meta object. This forces Stremio to fallback to Cinemeta 
-  // and prevents our partial database data from overriding official metadata.
+  // FIX: Safety check. If a request for an official ID somehow reaches this route,
+  // returning an empty meta object forces Stremio to fallback to Cinemeta correctly.
   if ((type !== 'series' && type !== 'movie') || !id.startsWith(config.addonId)) {
     return res.json({ meta: {} });
   }
