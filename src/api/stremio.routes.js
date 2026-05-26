@@ -81,29 +81,36 @@ router.get('/manifest.json', (req, res) => {
         resources: ['catalog', 'meta', 'stream'],
         types: ['series', 'movie'],
         catalogs: [
-            {
-                type: 'series',
-                id: 'tamilmv_series',
-                name: 'TamilMV WebSeries',
-                extra: [{ name: 'skip', isRequired: false }]
-            },
-            {
-                type: 'movie',
-                id: 'tamilmv_movies',
-                name: 'TamilMV Movies',
-                extra: [{ name: 'skip', isRequired: false }]
-            }
-        ],
+    {
+        type: 'series',
+        id: 'tamilmv_series',
+        name: 'Tamil WebSeries',
+        extra: [{ name: 'skip', isRequired: false }]
+    },
+    {
+        type: 'movie',
+        id: 'tamilmv_hd_movies',
+        name: 'Tamil HD Movies',
+        extra: [{ name: 'skip', isRequired: false }]
+    },
+    {
+        type: 'movie',
+        id: 'tamilmv_dubbed_movies',
+        name: 'Tamil HD Dubbed Movies',
+        extra: [{ name: 'skip', isRequired: false }]
+    }
+],
         idPrefixes: ['tt']
     };
     res.json(manifest);
 });
 
 // ── Catalog (v3.0.1‑fixed: hybrid skip support, pending items) ──
+// ── Catalog (v3.0.1‑fixed: hybrid skip + 3 separate catalogs) ──
 router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     const { type, id } = req.params;
 
-    // Support both path‑based skip (/skip=150.json) and query‑string (?skip=150)
+    // Support both path‑based skip (/skip=N.json) and query‑string (?skip=N)
     let skip = parseInt(req.query.skip || '0', 10);
     if (req.params.extra && req.params.extra.startsWith('skip=')) {
         skip = parseInt(req.params.extra.split('=')[1] || '0', 10);
@@ -111,37 +118,40 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
 
     const limit = 100;
 
-    try {
-        // Validate catalog id
-        if (type === 'series' && id !== 'tamilmv_series') {
-            return res.status(404).json({ err: 'Catalog not found' });
-        }
-        if (type === 'movie' && id !== 'tamilmv_movies') {
-            return res.status(404).json({ err: 'Catalog not found' });
-        }
-        if (type !== 'series' && type !== 'movie') {
-            return res.status(404).json({ err: 'Catalog not found' });
-        }
+    // Map catalog id → Thread.catalog value used by the scraper
+    const catalogMap = {
+        tamilmv_series: 'series',
+        tamilmv_hd_movies: 'movies',
+        tamilmv_dubbed_movies: 'dubbed_movies'
+    };
 
-        const whereClause = { type };
-        if (type === 'series') {
-            // Series: linked only (no catalog filter needed for unified catalog)
-            whereClause.status = 'linked';
-        } else if (type === 'movie') {
-            // Movies: linked only
-            whereClause.status = 'linked';
-        }
+    const catalogValue = catalogMap[id];
+    if (!catalogValue) {
+        return res.status(404).json({ err: 'Catalog not found' });
+    }
+
+    // Validate type consistency
+    if (id === 'tamilmv_series' && type !== 'series') {
+        return res.status(404).json({ err: 'Catalog not found' });
+    }
+    if ((id === 'tamilmv_hd_movies' || id === 'tamilmv_dubbed_movies') && type !== 'movie') {
+        return res.status(404).json({ err: 'Catalog not found' });
+    }
+
+    try {
+        const whereClause = {
+            type,
+            status: 'linked',
+            catalog: catalogValue       // ← filters by the catalog assigned during scraping
+        };
 
         const allThreads = await models.Thread.findAll({
             where: whereClause,
             include: [{
                 model: models.TmdbMetadata,
-                required: false        // LEFT JOIN – don't drop threads without metadata
+                required: false        // LEFT JOIN – keeps threads without metadata
             }],
-            order: [
-                [sequelize.literal("CASE `Thread`.`status` WHEN 'linked' THEN 0 ELSE 1 END"), 'ASC'],
-                ['postedAt', 'DESC']
-            ],
+            order: [['postedAt', 'DESC']],
             offset: skip,
             limit
         });
@@ -163,22 +173,12 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
                     genres: (data.genres || []).map(g => (typeof g === 'string' ? g : g.name)),
                 };
             }
-            // Include pending items with [PENDING] label (matching v1.0 behaviour)
-            if (thread.status === 'pending_tmdb') {
-                return {
-                    id: `${config.addonId}:pending:${thread.id}`,
-                    type: thread.type,
-                    name: `[PENDING] ${thread.clean_title}${thread.year ? ' (' + thread.year + ')' : ''}`,
-                    poster: thread.custom_poster || config.placeholderPoster,
-                    description: thread.custom_description || 'This item is pending an official metadata match.'
-                };
-            }
             return null;
         }).filter(Boolean);
 
         res.json({ metas });
     } catch (error) {
-        logger.error(error, `Failed to fetch catalog for type: ${type}`);
+        logger.error(error, `Failed to fetch catalog for type: ${type}, id: ${id}`);
         res.status(500).json({ err: 'Internal Server Error' });
     }
 });
