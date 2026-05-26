@@ -48,8 +48,13 @@ async function unifiedCheckCached(hashes, models) {
     if (provider.isEnabled && typeof provider.checkCached === 'function') {
         try {
             const result = await provider.checkCached(hashes);
-            logger.debug(`[checkCached] Provider returned instant results.`);
-            return result;
+            // If the result is completely empty (but we expected hashes), something went wrong – fallback
+            if (Object.keys(result).length === 0 && hashes.length > 0) {
+                logger.warn('Provider checkCached returned empty result, falling back to DB.');
+            } else {
+                logger.debug(`[checkCached] Provider returned instant results.`);
+                return result;
+            }
         } catch (err) {
             logger.warn({ err: err.message }, '[checkCached] Provider checkCached failed, falling back to DB.');
         }
