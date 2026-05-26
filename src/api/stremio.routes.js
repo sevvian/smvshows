@@ -99,36 +99,52 @@ router.get('/manifest.json', (req, res) => {
     res.json(manifest);
 });
 
-// ── Catalog ──────────────────────────────────────────────────────
-router.get('/catalog/:type/:id.json', async (req, res) => {
-    const { type } = req.params;
-    const skip = parseInt(req.query.skip || '0', 10);
+// ── Catalog (v3.0.1‑fixed: hybrid skip support, pending items) ──
+router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
+    const { type, id } = req.params;
+
+    // Support both path‑based skip (/skip=150.json) and query‑string (?skip=150)
+    let skip = parseInt(req.query.skip || '0', 10);
+    if (req.params.extra && req.params.extra.startsWith('skip=')) {
+        skip = parseInt(req.params.extra.split('=')[1] || '0', 10);
+    }
+
     const limit = 100;
 
     try {
-        let allThreads;
-        if (type === 'series') {
-            allThreads = await models.Thread.findAll({
-                where: { status: 'linked', type: 'series' },
-                include: [{ model: models.TmdbMetadata, required: true }],
-                order: [
-                    [sequelize.literal("CASE `Thread`.`status` WHEN 'linked' THEN 0 ELSE 1 END"), 'ASC'],
-                    ['postedAt', 'DESC']
-                ],
-                offset: skip,
-                limit
-            });
-        } else if (type === 'movie') {
-            allThreads = await models.Thread.findAll({
-                where: { status: 'linked', type: 'movie' },
-                include: [{ model: models.TmdbMetadata, required: true }],
-                order: [['postedAt', 'DESC']],
-                offset: skip,
-                limit
-            });
-        } else {
-            return res.json({ metas: [] });
+        // Validate catalog id
+        if (type === 'series' && id !== 'tamilmv_series') {
+            return res.status(404).json({ err: 'Catalog not found' });
         }
+        if (type === 'movie' && id !== 'tamilmv_movies') {
+            return res.status(404).json({ err: 'Catalog not found' });
+        }
+        if (type !== 'series' && type !== 'movie') {
+            return res.status(404).json({ err: 'Catalog not found' });
+        }
+
+        const whereClause = { type };
+        if (type === 'series') {
+            // Series: linked only (no catalog filter needed for unified catalog)
+            whereClause.status = 'linked';
+        } else if (type === 'movie') {
+            // Movies: linked only
+            whereClause.status = 'linked';
+        }
+
+        const allThreads = await models.Thread.findAll({
+            where: whereClause,
+            include: [{
+                model: models.TmdbMetadata,
+                required: false        // LEFT JOIN – don't drop threads without metadata
+            }],
+            order: [
+                [sequelize.literal("CASE `Thread`.`status` WHEN 'linked' THEN 0 ELSE 1 END"), 'ASC'],
+                ['postedAt', 'DESC']
+            ],
+            offset: skip,
+            limit
+        });
 
         const metas = allThreads.map(thread => {
             if (thread.status === 'linked' && thread.TmdbMetadatum && thread.TmdbMetadatum.imdb_id) {
@@ -147,13 +163,23 @@ router.get('/catalog/:type/:id.json', async (req, res) => {
                     genres: (data.genres || []).map(g => (typeof g === 'string' ? g : g.name)),
                 };
             }
+            // Include pending items with [PENDING] label (matching v1.0 behaviour)
+            if (thread.status === 'pending_tmdb') {
+                return {
+                    id: `${config.addonId}:pending:${thread.id}`,
+                    type: thread.type,
+                    name: `[PENDING] ${thread.clean_title}${thread.year ? ' (' + thread.year + ')' : ''}`,
+                    poster: thread.custom_poster || config.placeholderPoster,
+                    description: thread.custom_description || 'This item is pending an official metadata match.'
+                };
+            }
             return null;
         }).filter(Boolean);
 
         res.json({ metas });
     } catch (error) {
         logger.error(error, `Failed to fetch catalog for type: ${type}`);
-        res.status(500).json({ metas: [] });
+        res.status(500).json({ err: 'Internal Server Error' });
     }
 });
 
