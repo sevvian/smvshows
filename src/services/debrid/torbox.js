@@ -29,11 +29,11 @@ if (!config.isTorboxEnabled) {
         }
     };
 } else {
-    // ── Axios Instance ────────────────────────────────────────────
+    // ── Axios Instance (timeout increased to 30s) ─────────────────
     const tbApi = axios.create({
         baseURL: 'https://api.torbox.app/v1/api',
         headers: { Authorization: `Bearer ${config.torboxApiKey}` },
-        timeout: 15000
+        timeout: 30000   // 30 seconds (was 15000)
     });
 
     // ── Persisted Mapping via TorboxIdMap Model ──────────────────
@@ -76,6 +76,7 @@ if (!config.isTorboxEnabled) {
     async function getActiveTorrentCount() {
         try {
             const { data } = await tbApi.get('/torrents/mylist');
+            logger.debug({ mylistResponse: JSON.stringify(data).substring(0, 300) }, 'TorBox mylist raw response');
             const list = data.data || data;
             if (!Array.isArray(list)) return -1;
             const activeStates = new Set([
@@ -119,15 +120,31 @@ if (!config.isTorboxEnabled) {
             }
         }
         if (!hash) throw new ResourceNotFoundError(`Torrent ID ${numericId} not found.`);
-        const { data } = await tbApi.get('/torrents/torrentinfo', { params: { hash } });
-        const payload = data.data || data;
-        return payload;
+
+        // Retry up to 3 times with exponential backoff
+        let lastError = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                const { data } = await tbApi.get('/torrents/torrentinfo', { params: { hash } });
+                logger.debug({ torrentinfoResponse: JSON.stringify(data).substring(0, 300) }, 'TorBox torrentinfo raw response');
+                const payload = data.data || data;
+                return payload;
+            } catch (error) {
+                lastError = error;
+                logger.warn({ attempt, err: error.message, hash }, 'Torrent info request failed, retrying...');
+                if (attempt < 2) {
+                    await sleep(3000 * (attempt + 1)); // wait 3s, then 6s
+                }
+            }
+        }
+        throw lastError;
     }
 
     async function requestDownloadLink(torrentId, fileId) {
         const { data } = await tbApi.get('/torrents/requestdl', {
             params: { token: config.torboxApiKey, torrent_id: torrentId, file_id: fileId, redirect: false }
         });
+        logger.debug({ requestdlResponse: JSON.stringify(data).substring(0, 300) }, 'TorBox requestdl raw response');
         const payload = data.data || data;
         return payload.url || payload;
     }
@@ -346,6 +363,7 @@ if (!config.isTorboxEnabled) {
             const { data } = await tbApi.post('/torrents/checkcached', null, {
                 params: { hash: hashes }
             });
+            logger.debug({ checkCachedResponse: JSON.stringify(data).substring(0, 300) }, 'TorBox checkCached raw response');
 
             // TorBox may nest data under 'data' or return it at top level.
             let payload = data.data || data;
