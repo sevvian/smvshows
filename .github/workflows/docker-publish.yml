@@ -1,12 +1,12 @@
 name: Build and Push Docker Image to GHCR
 
 on:
-  push:
-    branches:
-      - '**'
-    tags:
-      - 'v*'
-      - 'release-*'
+#  push:
+#    branches:
+#      - '**'
+#    tags:
+#      - 'v*'
+#      - 'release-*'
   workflow_dispatch:
     inputs:
       tag:
