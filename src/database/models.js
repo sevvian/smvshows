@@ -113,5 +113,17 @@ module.exports = (sequelize) => {
         timestamps: false
     });
 
-    return { Thread, TmdbMetadata, Stream, FailedThread, DebridTorrent, DebridCacheLock, MagnetCache };
+    // ── TorboxIdMap (NEW — persists torrent_id → hash for TorBox) ─
+    const TorboxIdMap = sequelize.define('TorboxIdMap', {
+        torrent_id: { type: DataTypes.INTEGER, primaryKey: true },
+        hash: { type: DataTypes.STRING, allowNull: false, unique: true },
+    }, {
+        tableName: 'torbox_id_map',
+        timestamps: false
+    });
+
+    return {
+        Thread, TmdbMetadata, Stream, FailedThread,
+        DebridTorrent, DebridCacheLock, MagnetCache, TorboxIdMap
+    };
 };
