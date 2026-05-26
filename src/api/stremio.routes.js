@@ -105,7 +105,6 @@ router.get('/manifest.json', (req, res) => {
     res.json(manifest);
 });
 
-// ── Catalog (v3.0.1‑fixed: hybrid skip support, pending items) ──
 // ── Catalog (v3.0.1‑fixed: hybrid skip + 3 separate catalogs) ──
 router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     const { type, id } = req.params;
@@ -118,11 +117,11 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
 
     const limit = 100;
 
-    // Map catalog id → Thread.catalog value used by the scraper
+    // Map catalog id → Thread.catalog value (as saved by the crawler)
     const catalogMap = {
-        tamilmv_series: 'series',
-        tamilmv_hd_movies: 'movies',
-        tamilmv_dubbed_movies: 'dubbed_movies'
+        tamilmv_series: 'top-series-from-forum',
+        tamilmv_hd_movies: 'tamil-hd-movies',
+        tamilmv_dubbed_movies: 'tamil-dubbed-movies'
     };
 
     const catalogValue = catalogMap[id];
@@ -141,8 +140,7 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     try {
         const whereClause = {
             type,
-            status: 'linked',
-            catalog: catalogValue       // ← filters by the catalog assigned during scraping
+            catalog: catalogValue      // ← filters by the catalog assigned during scraping
         };
 
         const allThreads = await models.Thread.findAll({
@@ -151,12 +149,16 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
                 model: models.TmdbMetadata,
                 required: false        // LEFT JOIN – keeps threads without metadata
             }],
-            order: [['postedAt', 'DESC']],
+            order: [
+                [sequelize.literal("CASE `Thread`.`status` WHEN 'linked' THEN 0 ELSE 1 END"), 'ASC'],
+                ['postedAt', 'DESC']
+            ],
             offset: skip,
             limit
         });
 
         const metas = allThreads.map(thread => {
+            // Linked item with TMDB metadata
             if (thread.status === 'linked' && thread.TmdbMetadatum && thread.TmdbMetadatum.imdb_id) {
                 const meta = thread.TmdbMetadatum;
                 const data = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
@@ -173,6 +175,18 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
                     genres: (data.genres || []).map(g => (typeof g === 'string' ? g : g.name)),
                 };
             }
+
+            // Pending item (matching v1.0 behaviour)
+            if (thread.status === 'pending_tmdb') {
+                return {
+                    id: `${config.addonId}:pending:${thread.id}`,
+                    type: thread.type,
+                    name: `[PENDING] ${thread.clean_title}${thread.year ? ' (' + thread.year + ')' : ''}`,
+                    poster: thread.custom_poster || config.placeholderPoster,
+                    description: thread.custom_description || 'This item is pending an official metadata match.'
+                };
+            }
+
             return null;
         }).filter(Boolean);
 
