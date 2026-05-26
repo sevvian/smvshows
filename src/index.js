@@ -31,8 +31,23 @@ async function main() {
     app.use(express.json());
     app.use(pinoHttp({ logger }));
 
-    app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'admin.html')));
-    app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'admin.html')));
+app.get('/', (req, res) => {
+    res.set({
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+    });
+    res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
+});
+
+app.get('/admin', (req, res) => {
+    res.set({
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+    });
+    res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
+});
 
     app.use(stremioRoutes);
     app.use('/admin/api', adminRoutes);
