@@ -39,7 +39,7 @@
     <div class="section">
         <h2>Dashboard</h2>
         <table>
-            <tr><td>Total Linked Series:</td><td id="linkedCount">0</td></tr>
+            <tr><td>Total Linked:</td><td id="linkedCount">0</td></tr>
             <tr><td>Pending TMDB Match:</td><td id="pendingCount">0</td></tr>
             <tr><td>Critical Parse Failures:</td><td id="failedCount">0</td></tr>
         </table>
@@ -118,175 +118,203 @@
     </div>
 
     <script>
-        let focusedThreadId = null;
-        let page = 1;
+        (function() {
+            'use strict';
 
-        async function fetchHealth() {
-            const r = await fetch('/admin/api/health');
-            const d = await r.json();
-            document.getElementById('isCrawling').textContent = d.isCrawling ? 'Yes' : 'No';
-            document.getElementById('lastUpdated').textContent = d.lastUpdated || '-';
-            document.getElementById('debridService').textContent = d.debridService || 'none';
-            document.getElementById('cacheCheckMethod').textContent = d.debridCacheCheck === 'instant' ? '⚡ Instant (API)' : '🗄️ Database';
-            document.getElementById('rdEnabled').textContent = d.realDebridEnabled ? '✓' : '✗';
-            document.getElementById('torboxEnabled').textContent = d.torboxEnabled ? '✓' : '✗';
-            document.getElementById('tmdbConfigured').textContent = d.tmdbConfigured ? '✓' : '✗';
-            document.getElementById('trackerCount').textContent = d.trackerCount;
-            document.getElementById('dbSize').textContent = d.dbSizeBytes ? (d.dbSizeBytes / 1024 / 1024).toFixed(1) + ' MB' : '-';
-            document.getElementById('linkedCount').textContent = d.linked;
-            document.getElementById('pendingCount').textContent = d.pending;
-            document.getElementById('failedCount').textContent = d.failed;
-        }
+            let focusedThreadId = null;
+            let page = 1;
 
-        document.getElementById('triggerCrawl').addEventListener('click', async () => {
-            await fetch('/admin/api/trigger-crawl', { method: 'POST' });
-            alert('Crawl triggered!');
-        });
-
-        async function loadPending() {
-            const r = await fetch('/admin/api/pending');
-            const items = await r.json();
-            const sel = document.getElementById('availableList');
-            sel.innerHTML = '';
-            items.forEach(t => {
-                const opt = document.createElement('option');
-                opt.value = t.id;
-                opt.textContent = t.clean_title || t.raw_title;
-                sel.appendChild(opt);
-            });
-        }
-
-        document.getElementById('setFocusBtn').addEventListener('click', async () => {
-            const sel = document.getElementById('selectedList');
-            if (sel.selectedOptions.length > 0) {
-                focusedThreadId = sel.selectedOptions[0].value;
-                document.getElementById('focusedTitle').textContent = sel.selectedOptions[0].textContent;
-                await loadStreams(focusedThreadId);
+            // ── Utility: safe DOM access ─────────────────────────
+            function el(id) {
+                return document.getElementById(id);
             }
-        });
 
-        async function loadStreams(threadId) {
-            const r = await fetch(`/admin/api/pending/${threadId}/streams`);
-            const data = await r.json();
-            const tbody = document.getElementById('streamsBody');
-            tbody.innerHTML = '';
-            data.items.forEach((item, i) => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td>${item.label}</td>
-                    <td>${item.quality || 'SD'} / ${item.language || 'NA'}</td>
-                    <td><input type="radio" name="streamSelect" value="${item.infohash}" ${data.locked.includes(item.infohash) ? 'disabled' : ''}></td>
-                `;
-                if (data.locked.includes(item.infohash)) {
-                    tr.style.opacity = '0.5';
-                    tr.title = 'Already initiated';
+            // ── Health & Dashboard ───────────────────────────────
+            async function fetchHealth() {
+                try {
+                    const r = await fetch('/admin/api/health');
+                    const d = await r.json();
+                    el('isCrawling').textContent = d.isCrawling ? 'Yes' : 'No';
+                    el('lastUpdated').textContent = d.lastUpdated || '-';
+                    el('debridService').textContent = d.debridService || 'none';
+                    el('cacheCheckMethod').textContent = d.debridCacheCheck === 'instant' ? '⚡ Instant (API)' : '🗄️ Database';
+                    el('rdEnabled').textContent = d.realDebridEnabled ? '✓' : '✗';
+                    el('torboxEnabled').textContent = d.torboxEnabled ? '✓' : '✗';
+                    el('tmdbConfigured').textContent = d.tmdbConfigured ? '✓' : '✗';
+                    el('trackerCount').textContent = d.trackerCount;
+                    el('dbSize').textContent = d.dbSizeBytes ? (d.dbSizeBytes / 1024 / 1024).toFixed(1) + ' MB' : '-';
+
+                    // Dashboard counts
+                    el('linkedCount').textContent = d.linked ?? 0;
+                    el('pendingCount').textContent = d.pending ?? 0;
+                    el('failedCount').textContent = d.failed ?? 0;
+                } catch (err) {
+                    console.error('Health fetch failed:', err);
                 }
-                tbody.appendChild(tr);
+            }
+
+            // ── Trigger Crawl ────────────────────────────────────
+            el('triggerCrawl').addEventListener('click', async () => {
+                await fetch('/admin/api/trigger-crawl', { method: 'POST' });
+                alert('Crawl triggered!');
             });
-        }
 
-        document.getElementById('cacheSelected').addEventListener('click', async () => {
-            if (!focusedThreadId) return alert('Set a focused item first.');
-            const radio = document.querySelector('input[name="streamSelect"]:checked');
-            const infohash = radio ? radio.value : null;
-            const r = await fetch('/admin/api/rd-cache-pending', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ threadId: parseInt(focusedThreadId), infohash })
+            // ── Pending Items ────────────────────────────────────
+            async function loadPending() {
+                const r = await fetch('/admin/api/pending');
+                const items = await r.json();
+                const sel = el('availableList');
+                sel.innerHTML = '';
+                items.forEach(t => {
+                    const opt = document.createElement('option');
+                    opt.value = t.id;
+                    opt.textContent = t.clean_title || t.raw_title;
+                    sel.appendChild(opt);
+                });
+            }
+
+            el('setFocusBtn').addEventListener('click', async () => {
+                const sel = el('selectedList');
+                if (sel.selectedOptions.length > 0) {
+                    focusedThreadId = sel.selectedOptions[0].value;
+                    el('focusedTitle').textContent = sel.selectedOptions[0].textContent;
+                    await loadStreams(focusedThreadId);
+                }
             });
-            const d = await r.json();
-            alert(d.message);
-            await loadStreams(focusedThreadId);
-        });
 
-        document.getElementById('linkFocused').addEventListener('click', async () => {
-            if (!focusedThreadId) return alert('Set a focused item first.');
-            const officialId = document.getElementById('officialId').value.trim();
-            if (!officialId) return alert('Enter an official ID.');
-            const r = await fetch('/admin/api/link-official', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ threadId: parseInt(focusedThreadId), officialId })
+            async function loadStreams(threadId) {
+                const r = await fetch(`/admin/api/pending/${threadId}/streams`);
+                const data = await r.json();
+                const tbody = el('streamsBody');
+                tbody.innerHTML = '';
+                if (!data.items || data.items.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="3">No streams found.</td></tr>';
+                    return;
+                }
+                data.items.forEach((item, i) => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${item.label}</td>
+                        <td>${item.quality || 'SD'} / ${item.language || 'NA'}</td>
+                        <td><input type="radio" name="streamSelect" value="${item.infohash}" ${data.locked.includes(item.infohash) ? 'disabled' : ''}></td>
+                    `;
+                    if (data.locked.includes(item.infohash)) {
+                        tr.style.opacity = '0.5';
+                        tr.title = 'Already initiated';
+                    }
+                    tbody.appendChild(tr);
+                });
+            }
+
+            el('cacheSelected').addEventListener('click', async () => {
+                if (!focusedThreadId) return alert('Set a focused item first.');
+                const radio = document.querySelector('input[name="streamSelect"]:checked');
+                const infohash = radio ? radio.value : null;
+                const r = await fetch('/admin/api/rd-cache-pending', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ threadId: parseInt(focusedThreadId), infohash })
+                });
+                const d = await r.json();
+                alert(d.message);
+                await loadStreams(focusedThreadId);
             });
-            const d = await r.json();
-            alert(d.message);
-            loadPending();
-        });
 
-        document.getElementById('saveFocused').addEventListener('click', async () => {
-            if (!focusedThreadId) return alert('Set a focused item first.');
-            const r = await fetch('/admin/api/custom-meta', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    threadId: parseInt(focusedThreadId),
-                    poster: document.getElementById('customPoster').value || undefined,
-                    description: document.getElementById('customDescription').value || undefined
-                })
+            el('linkFocused').addEventListener('click', async () => {
+                if (!focusedThreadId) return alert('Set a focused item first.');
+                const officialId = el('officialId').value.trim();
+                if (!officialId) return alert('Enter an official ID.');
+                const r = await fetch('/admin/api/link-official', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ threadId: parseInt(focusedThreadId), officialId })
+                });
+                const d = await r.json();
+                alert(d.message);
+                loadPending();
             });
-            const d = await r.json();
-            alert(d.message);
-        });
 
-        document.getElementById('moveBtn').addEventListener('click', () => moveItems('availableList', 'selectedList'));
-        document.getElementById('removeBtn').addEventListener('click', () => moveItems('selectedList', 'availableList'));
-        document.getElementById('moveAllBtn').addEventListener('click', () => moveAll('availableList', 'selectedList'));
-        document.getElementById('clearAllBtn').addEventListener('click', () => moveAll('selectedList', 'availableList'));
-
-        function moveItems(fromId, toId) {
-            const from = document.getElementById(fromId);
-            const to = document.getElementById(toId);
-            [...from.selectedOptions].forEach(opt => to.appendChild(opt));
-        }
-        function moveAll(fromId, toId) {
-            const from = document.getElementById(fromId);
-            const to = document.getElementById(toId);
-            [...from.options].forEach(opt => to.appendChild(opt));
-        }
-
-        async function loadFailures() {
-            const r = await fetch('/admin/api/failures');
-            const items = await r.json();
-            const tbody = document.getElementById('failuresBody');
-            tbody.innerHTML = items.map(f => `
-                <tr>
-                    <td>${f.raw_title}</td>
-                    <td>${f.reason}</td>
-                    <td>${f.last_attempt}</td>
-                    <td><button onclick="retryParse('${f.thread_hash}')">Retry</button></td>
-                </tr>
-            `).join('');
-        }
-
-        async function retryParse(hash) {
-            await fetch('/admin/api/retry-parse', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ threadHash: hash })
+            el('saveFocused').addEventListener('click', async () => {
+                if (!focusedThreadId) return alert('Set a focused item first.');
+                const r = await fetch('/admin/api/custom-meta', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        threadId: parseInt(focusedThreadId),
+                        poster: el('customPoster').value || undefined,
+                        description: el('customDescription').value || undefined
+                    })
+                });
+                const d = await r.json();
+                alert(d.message);
             });
-            loadFailures();
-        }
 
-        async function loadRecent(p) {
-            page = p || page;
-            const r = await fetch(`/admin/api/recent?limit=15&page=${page}`);
-            const d = await r.json();
-            document.getElementById('currentPage').textContent = page;
-            document.getElementById('recentBody').innerHTML = [
-                ...d.linked.map(l => `<tr><td>Linked</td><td>${l.title}</td><td>${l.updatedAt}</td></tr>`),
-                ...d.failures.map(f => `<tr><td>Failed</td><td>${f.title}</td><td>${f.last_attempt}</td></tr>`)
-            ].join('');
-        }
+            // Move buttons
+            el('moveBtn').addEventListener('click', () => moveItems('availableList', 'selectedList'));
+            el('removeBtn').addEventListener('click', () => moveItems('selectedList', 'availableList'));
+            el('moveAllBtn').addEventListener('click', () => moveAll('availableList', 'selectedList'));
+            el('clearAllBtn').addEventListener('click', () => moveAll('selectedList', 'availableList'));
 
-        document.getElementById('prevPage').addEventListener('click', () => { if (page > 1) loadRecent(page - 1); });
-        document.getElementById('nextPage').addEventListener('click', () => loadRecent(page + 1));
+            function moveItems(fromId, toId) {
+                const from = el(fromId);
+                const to = el(toId);
+                [...from.selectedOptions].forEach(opt => to.appendChild(opt));
+            }
+            function moveAll(fromId, toId) {
+                const from = el(fromId);
+                const to = el(toId);
+                [...from.options].forEach(opt => to.appendChild(opt));
+            }
 
-        // Init
-        fetchHealth();
-        loadPending();
-        loadFailures();
-        loadRecent(1);
-        setInterval(fetchHealth, 30000);
+            // ── Failures ─────────────────────────────────────────
+            async function loadFailures() {
+                const r = await fetch('/admin/api/failures');
+                const items = await r.json();
+                const tbody = el('failuresBody');
+                tbody.innerHTML = items.map(f => `
+                    <tr>
+                        <td>${f.raw_title}</td>
+                        <td>${f.reason}</td>
+                        <td>${f.last_attempt}</td>
+                        <td><button onclick="retryParse('${f.thread_hash}')">Retry</button></td>
+                    </tr>
+                `).join('');
+            }
+
+            window.retryParse = async function(hash) {
+                await fetch('/admin/api/retry-parse', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ threadHash: hash })
+                });
+                loadFailures();
+            };
+
+            // ── Recent Activity ──────────────────────────────────
+            async function loadRecent(p) {
+                page = p || page;
+                const r = await fetch(`/admin/api/recent?limit=15`);
+                const d = await r.json();
+                el('currentPage').textContent = page;
+                const rows = [];
+                (d.linked || []).forEach(l => rows.push(`<tr><td>Linked</td><td>${l.title}</td><td>${l.updatedAt}</td></tr>`));
+                (d.failures || []).forEach(f => rows.push(`<tr><td>Failed</td><td>${f.title}</td><td>${f.last_attempt}</td></tr>`));
+                el('recentBody').innerHTML = rows.join('');
+            }
+
+            el('prevPage').addEventListener('click', () => { if (page > 1) loadRecent(page - 1); });
+            el('nextPage').addEventListener('click', () => loadRecent(page + 1));
+
+            // ── Init ─────────────────────────────────────────────
+            document.addEventListener('DOMContentLoaded', () => {
+                fetchHealth();
+                loadPending();
+                loadFailures();
+                loadRecent(1);
+                // Refresh health and dashboard every 30 seconds
+                setInterval(fetchHealth, 30000);
+            });
+        })();
     </script>
 </body>
 </html>
