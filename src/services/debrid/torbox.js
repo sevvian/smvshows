@@ -1,5 +1,6 @@
 // src/services/debrid/torbox.js
 const axios = require('axios');
+const FormData = require('form-data');   // already in your dependencies
 const logger = require('../../utils/logger');
 const config = require('../../config/config');
 
@@ -53,12 +54,12 @@ if (!config.isTorboxEnabled) {
     const torrentSelections = new Map();
 
     // ── v3.0.1: Rate Limiter & Active Slot Guard ──────────────────
-    const addMagnetTimestamps = [];            // sliding window (millisecond timestamps)
-    const MAX_ADDS_PER_MINUTE = 8;             // stay under the 10/min edge limit
-    const ADD_COOLDOWN_MS = 60_000;            // 1 minute window
+    const addMagnetTimestamps = [];
+    const MAX_ADDS_PER_MINUTE = 8;
+    const ADD_COOLDOWN_MS = 60_000;
 
-    const recentMagnetAdds = new Map();        // infohash → { timestamp, torrentId }
-    const DEDUP_WINDOW_MS = 30_000;            // 30 seconds
+    const recentMagnetAdds = new Map();
+    const DEDUP_WINDOW_MS = 30_000;
 
     function extractInfoHash(magnet) {
         const m = magnet.match(/btih:([a-fA-F0-9]{40})/);
@@ -71,13 +72,12 @@ if (!config.isTorboxEnabled) {
 
     /**
      * Count torrents in "active" states (consuming a download/seeding slot).
-     * Active states: downloading, metadl, checkingresumedata, stalled, uploading, seeding
      */
     async function getActiveTorrentCount() {
         try {
             const { data } = await tbApi.get('/torrents/mylist');
             const list = data.data || data;
-            if (!Array.isArray(list)) return -1; // unknown
+            if (!Array.isArray(list)) return -1;
             const activeStates = new Set([
                 'downloading', 'metadl', 'checkingresumedata',
                 'stalled (no seeds)', 'uploading', 'seeding'
@@ -85,17 +85,15 @@ if (!config.isTorboxEnabled) {
             return list.filter(t => activeStates.has((t.status || '').toLowerCase())).length;
         } catch (e) {
             logger.warn({ err: e.message }, 'Failed to count active torrents via /mylist.');
-            return -1; // unknown; caller should not block
+            return -1;
         }
     }
 
     /**
      * Enforce the local rate limit for POST /createtorrent.
-     * Returns true if the call is allowed, false otherwise.
      */
     function checkAddMagnetRateLimit() {
         const now = Date.now();
-        // Remove timestamps older than 1 minute
         while (addMagnetTimestamps.length > 0 && addMagnetTimestamps[0] < now - ADD_COOLDOWN_MS) {
             addMagnetTimestamps.shift();
         }
@@ -140,15 +138,15 @@ if (!config.isTorboxEnabled) {
         if (s === 'completed' || s === 'cached' || s === 'uploading' || s === 'seeding') return 'downloaded';
         if (s === 'stalled (no seeds)' || s === 'paused') return 'downloading';
         if (s === 'error' || s === 'failed') return 'error';
-        if (s === 'queued') return 'queued';        // v3.0.1: preserve native queued status
+        if (s === 'queued') return 'queued';
         return 'queued';
     }
 
-    // ── 1. addMagnet (v3.0.1: with rate limiter, active-slot guard, retry, and dedup) ──
+    // ── 1. addMagnet (FIXED: multipart/form-data + response logging) ──
     async function addMagnet(magnet) {
         const infohash = extractInfoHash(magnet);
 
-        // ── Dedup: same infohash added within 30 seconds → return existing ──
+        // Dedup: same infohash added within 30 seconds → return existing
         if (infohash && recentMagnetAdds.has(infohash)) {
             const prev = recentMagnetAdds.get(infohash);
             if (Date.now() - prev.timestamp < DEDUP_WINDOW_MS) {
@@ -157,32 +155,37 @@ if (!config.isTorboxEnabled) {
             }
         }
 
-        // ── Rate limit check ──
+        // Rate limit check
         if (!checkAddMagnetRateLimit()) {
             logger.warn('addMagnet rate limit exceeded (8/min). Rejecting request.');
             throw new Error('TorBox addMagnet rate limit exceeded. Please wait and retry.');
         }
 
-        // ── Active slot check (optional, only if env var is set) ──
+        // Active slot check (optional)
         const maxActive = parseInt(process.env.TORBOX_MAX_ACTIVE_TORRENTS, 10) || 0;
         if (maxActive > 0) {
             const activeCount = await getActiveTorrentCount();
             if (activeCount >= maxActive) {
                 logger.warn({ activeCount, maxActive },
                     'TorBox active torrent count at or above limit. Torrent will be queued by TorBox if accepted.');
-                // Do NOT reject – TorBox will queue natively
             }
         }
 
-        // ── Core API call with retry logic ──
+        // Core API call with retry logic
         let lastError = null;
         for (let attempt = 0; attempt < 3; attempt++) {
             try {
-                const formData = new URLSearchParams();
-                formData.append('magnet', magnet);
-                const response = await tbApi.post('/torrents/createtorrent', formData, {
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                // ✅ USE MULTIPART/FORM-DATA
+                const form = new FormData();
+                form.append('magnet', magnet);
+
+                const response = await tbApi.post('/torrents/createtorrent', form, {
+                    headers: form.getHeaders()   // automatically sets multipart/form-data boundary
                 });
+
+                // Log raw response for debugging
+                logger.info({ responseData: JSON.stringify(response.data).substring(0, 200) }, 'TorBox createtorrent raw response');
+
                 const payload = response.data.data || response.data;
 
                 if (payload && payload.id && payload.hash) {
@@ -194,25 +197,34 @@ if (!config.isTorboxEnabled) {
                             logger.warn({ torrent_id: payload.id, err: e.message }, 'Failed to persist TorboxIdMap.');
                         }
                     }
-                    // Record for dedup
                     if (infohash) {
                         recentMagnetAdds.set(infohash, { timestamp: Date.now(), torrentId: payload.id });
                     }
                     return { id: payload.id, hash: payload.hash, name: payload.name, ...payload };
                 }
+
+                logger.error({
+                    rawResponse: JSON.stringify(response.data),
+                    message: 'addMagnet response missing id/hash'
+                }, 'Failed to add magnet to TorBox.');
                 lastError = new Error('addMagnet response missing id/hash');
-                break; // non-retryable
+                break;
+
             } catch (error) {
+                logger.error({
+                    status: error.response?.status,
+                    data: error.response?.data,
+                    message: error.message
+                }, 'TorBox createtorrent request failed');
+
                 lastError = error;
                 const errBody = error.response?.data || {};
                 const errCode = errBody.error || '';
 
-                // ── Handle specific limit errors ──
                 if (errCode === 'ACTIVE_LIMIT') {
                     if (attempt < 2) {
-                        const waitMs = 5000 * Math.pow(2, attempt); // 5s, 10s, 20s
-                        logger.warn({ errCode, attempt, waitMs },
-                            'TorBox ACTIVE_LIMIT error. Retrying after backoff.');
+                        const waitMs = 5000 * Math.pow(2, attempt);
+                        logger.warn({ errCode, attempt, waitMs }, 'TorBox ACTIVE_LIMIT error. Retrying after backoff.');
                         await sleep(waitMs);
                         continue;
                     }
@@ -226,13 +238,11 @@ if (!config.isTorboxEnabled) {
                 if (errCode === 'PLAN_RESTRICTED_FEATURE') {
                     throw new Error('This feature is restricted to higher TorBox plans.');
                 }
-                // Non-retryable errors break immediately
                 break;
             }
         }
 
-        logger.error({ err: lastError?.response?.data || lastError?.message, magnet },
-            'Failed to add magnet to TorBox.');
+        logger.error({ err: lastError?.response?.data || lastError?.message, magnet }, 'Failed to add magnet to TorBox.');
         throw lastError || new Error('Failed to add magnet to TorBox.');
     }
 
@@ -337,6 +347,7 @@ if (!config.isTorboxEnabled) {
             for (const hash of hashes) {
                 result[hash] = !!payload[hash];
             }
+            logger.debug({ hashCount: hashes.length, cachedCount: Object.keys(result).filter(k => result[k]).length }, 'TorBox checkCached result');
             return result;
         } catch (error) {
             logger.error({ err: error.response?.data || error.message }, 'Failed to check cached on TorBox.');
