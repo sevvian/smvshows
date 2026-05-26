@@ -36,21 +36,11 @@ function createDisabledProvider() {
         selectFiles: async () => { throw new Error('No debrid service configured.'); },
         unrestrictLink: async () => { throw new Error('No debrid service configured.'); },
         addAndSelect: async () => { throw new Error('No debrid service configured.'); },
-        // checkCached intentionally omitted – triggers DB fallback
         ResourceNotFoundError
     };
 }
 
 // ── Unified checkCached ─────────────────────────────────────────
-/**
- * Batch-check torrent cache status.
- * If the provider has a native checkCached method, use it for instant results.
- * Otherwise, fall back to the local database.
- *
- * @param {string[]} hashes – Array of info hashes to check
- * @param {object} models – Sequelize models (for DB fallback)
- * @returns {Promise<object>} – { [hash]: true | false }
- */
 async function unifiedCheckCached(hashes, models) {
     const provider = getProvider();
 
@@ -76,7 +66,6 @@ async function unifiedCheckCached(hashes, models) {
             for (const record of records) {
                 dbResults[record.infohash] = record.status === 'downloaded';
             }
-            // Hashes not in DB are not cached
             for (const hash of hashes) {
                 if (!(hash in dbResults)) dbResults[hash] = false;
             }
@@ -98,7 +87,6 @@ module.exports = new Proxy({}, {
         if (prop === 'checkCached') {
             return (hashes, models) => unifiedCheckCached(hashes, models);
         }
-        // Expose getProvider for health check
         if (prop === 'getProvider') return getProvider;
         const p = getProvider();
         if (prop in p) return p[prop];
