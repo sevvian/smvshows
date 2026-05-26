@@ -38,11 +38,6 @@ if (!config.isTorboxEnabled) {
     // ── Persisted Mapping via TorboxIdMap Model ──────────────────
     let TorboxIdMap = null;
 
-    /**
-     * Called by the database layer after models are initialized.
-     * Preloads existing torrent_id → hash mappings from the database
-     * so that restarts do not cause cache misses.
-     */
     function setModels(models) {
         if (models && models.TorboxIdMap) {
             TorboxIdMap = models.TorboxIdMap;
@@ -54,15 +49,66 @@ if (!config.isTorboxEnabled) {
     }
 
     // ── In-Memory Caches ──────────────────────────────────────────
-    const torrentIdToHash = new Map();    // numeric id → hash
-    const torrentSelections = new Map();  // numeric id → Set<file_id>
+    const torrentIdToHash = new Map();
+    const torrentSelections = new Map();
+
+    // ── v3.0.1: Rate Limiter & Active Slot Guard ──────────────────
+    const addMagnetTimestamps = [];            // sliding window (millisecond timestamps)
+    const MAX_ADDS_PER_MINUTE = 8;             // stay under the 10/min edge limit
+    const ADD_COOLDOWN_MS = 60_000;            // 1 minute window
+
+    const recentMagnetAdds = new Map();        // infohash → { timestamp, torrentId }
+    const DEDUP_WINDOW_MS = 30_000;            // 30 seconds
+
+    function extractInfoHash(magnet) {
+        const m = magnet.match(/btih:([a-fA-F0-9]{40})/);
+        return m ? m[1].toLowerCase() : null;
+    }
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
+     * Count torrents in "active" states (consuming a download/seeding slot).
+     * Active states: downloading, metadl, checkingresumedata, stalled, uploading, seeding
+     */
+    async function getActiveTorrentCount() {
+        try {
+            const { data } = await tbApi.get('/torrents/mylist');
+            const list = data.data || data;
+            if (!Array.isArray(list)) return -1; // unknown
+            const activeStates = new Set([
+                'downloading', 'metadl', 'checkingresumedata',
+                'stalled (no seeds)', 'uploading', 'seeding'
+            ]);
+            return list.filter(t => activeStates.has((t.status || '').toLowerCase())).length;
+        } catch (e) {
+            logger.warn({ err: e.message }, 'Failed to count active torrents via /mylist.');
+            return -1; // unknown; caller should not block
+        }
+    }
+
+    /**
+     * Enforce the local rate limit for POST /createtorrent.
+     * Returns true if the call is allowed, false otherwise.
+     */
+    function checkAddMagnetRateLimit() {
+        const now = Date.now();
+        // Remove timestamps older than 1 minute
+        while (addMagnetTimestamps.length > 0 && addMagnetTimestamps[0] < now - ADD_COOLDOWN_MS) {
+            addMagnetTimestamps.shift();
+        }
+        if (addMagnetTimestamps.length >= MAX_ADDS_PER_MINUTE) {
+            return false;
+        }
+        addMagnetTimestamps.push(now);
+        return true;
+    }
 
     // ── Helpers ───────────────────────────────────────────────────
     async function fetchRawTorrentInfo(numericId) {
-        // First try in-memory cache
         let hash = torrentIdToHash.get(numericId);
-
-        // If not in memory, try to recover from DB
         if (!hash && TorboxIdMap) {
             try {
                 const row = await TorboxIdMap.findByPk(numericId);
@@ -74,9 +120,7 @@ if (!config.isTorboxEnabled) {
                 logger.warn({ numericId, err: e.message }, 'Failed to recover hash from TorboxIdMap.');
             }
         }
-
         if (!hash) throw new ResourceNotFoundError(`Torrent ID ${numericId} not found.`);
-
         const { data } = await tbApi.get('/torrents/torrentinfo', { params: { hash } });
         const payload = data.data || data;
         return payload;
@@ -84,12 +128,7 @@ if (!config.isTorboxEnabled) {
 
     async function requestDownloadLink(torrentId, fileId) {
         const { data } = await tbApi.get('/torrents/requestdl', {
-            params: {
-                token: config.torboxApiKey,
-                torrent_id: torrentId,
-                file_id: fileId,
-                redirect: false
-            }
+            params: { token: config.torboxApiKey, torrent_id: torrentId, file_id: fileId, redirect: false }
         });
         const payload = data.data || data;
         return payload.url || payload;
@@ -101,34 +140,100 @@ if (!config.isTorboxEnabled) {
         if (s === 'completed' || s === 'cached' || s === 'uploading' || s === 'seeding') return 'downloaded';
         if (s === 'stalled (no seeds)' || s === 'paused') return 'downloading';
         if (s === 'error' || s === 'failed') return 'error';
+        if (s === 'queued') return 'queued';        // v3.0.1: preserve native queued status
         return 'queued';
     }
 
-    // ── 1. addMagnet ──────────────────────────────────────────────
+    // ── 1. addMagnet (v3.0.1: with rate limiter, active-slot guard, retry, and dedup) ──
     async function addMagnet(magnet) {
-        try {
-            const formData = new URLSearchParams();
-            formData.append('magnet', magnet);
-            const response = await tbApi.post('/torrents/createtorrent', formData, {
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-            });
-            const payload = response.data.data || response.data;
-            if (payload && payload.id && payload.hash) {
-                torrentIdToHash.set(payload.id, payload.hash);
-                // Persist mapping to DB for survival across restarts
-                if (TorboxIdMap) {
-                    try {
-                        await TorboxIdMap.upsert({ torrent_id: payload.id, hash: payload.hash });
-                    } catch (e) {
-                        logger.warn({ torrent_id: payload.id, err: e.message }, 'Failed to persist TorboxIdMap.');
+        const infohash = extractInfoHash(magnet);
+
+        // ── Dedup: same infohash added within 30 seconds → return existing ──
+        if (infohash && recentMagnetAdds.has(infohash)) {
+            const prev = recentMagnetAdds.get(infohash);
+            if (Date.now() - prev.timestamp < DEDUP_WINDOW_MS) {
+                logger.info({ infohash, torrentId: prev.torrentId }, 'Torrent already added recently; returning existing ID.');
+                return { id: prev.torrentId, hash: infohash };
+            }
+        }
+
+        // ── Rate limit check ──
+        if (!checkAddMagnetRateLimit()) {
+            logger.warn('addMagnet rate limit exceeded (8/min). Rejecting request.');
+            throw new Error('TorBox addMagnet rate limit exceeded. Please wait and retry.');
+        }
+
+        // ── Active slot check (optional, only if env var is set) ──
+        const maxActive = parseInt(process.env.TORBOX_MAX_ACTIVE_TORRENTS, 10) || 0;
+        if (maxActive > 0) {
+            const activeCount = await getActiveTorrentCount();
+            if (activeCount >= maxActive) {
+                logger.warn({ activeCount, maxActive },
+                    'TorBox active torrent count at or above limit. Torrent will be queued by TorBox if accepted.');
+                // Do NOT reject – TorBox will queue natively
+            }
+        }
+
+        // ── Core API call with retry logic ──
+        let lastError = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                const formData = new URLSearchParams();
+                formData.append('magnet', magnet);
+                const response = await tbApi.post('/torrents/createtorrent', formData, {
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                });
+                const payload = response.data.data || response.data;
+
+                if (payload && payload.id && payload.hash) {
+                    torrentIdToHash.set(payload.id, payload.hash);
+                    if (TorboxIdMap) {
+                        try {
+                            await TorboxIdMap.upsert({ torrent_id: payload.id, hash: payload.hash });
+                        } catch (e) {
+                            logger.warn({ torrent_id: payload.id, err: e.message }, 'Failed to persist TorboxIdMap.');
+                        }
+                    }
+                    // Record for dedup
+                    if (infohash) {
+                        recentMagnetAdds.set(infohash, { timestamp: Date.now(), torrentId: payload.id });
+                    }
+                    return { id: payload.id, hash: payload.hash, name: payload.name, ...payload };
+                }
+                lastError = new Error('addMagnet response missing id/hash');
+                break; // non-retryable
+            } catch (error) {
+                lastError = error;
+                const errBody = error.response?.data || {};
+                const errCode = errBody.error || '';
+
+                // ── Handle specific limit errors ──
+                if (errCode === 'ACTIVE_LIMIT') {
+                    if (attempt < 2) {
+                        const waitMs = 5000 * Math.pow(2, attempt); // 5s, 10s, 20s
+                        logger.warn({ errCode, attempt, waitMs },
+                            'TorBox ACTIVE_LIMIT error. Retrying after backoff.');
+                        await sleep(waitMs);
+                        continue;
                     }
                 }
+                if (errCode === 'COOLDOWN_LIMIT') {
+                    throw new Error('TorBox cooldown limit reached. Free plan allows 1 download per 24 hours.');
+                }
+                if (errCode === 'MONTHLY_LIMIT') {
+                    throw new Error('TorBox monthly download limit reached (Free plan: 10/month).');
+                }
+                if (errCode === 'PLAN_RESTRICTED_FEATURE') {
+                    throw new Error('This feature is restricted to higher TorBox plans.');
+                }
+                // Non-retryable errors break immediately
+                break;
             }
-            return { id: payload.id, hash: payload.hash, name: payload.name, ...payload };
-        } catch (error) {
-            logger.error({ err: error.response?.data || error.message, magnet }, 'Failed to add magnet to TorBox.');
-            throw error;
         }
+
+        logger.error({ err: lastError?.response?.data || lastError?.message, magnet },
+            'Failed to add magnet to TorBox.');
+        throw lastError || new Error('Failed to add magnet to TorBox.');
     }
 
     // ── 2. getTorrentInfo ─────────────────────────────────────────
@@ -223,7 +328,6 @@ if (!config.isTorboxEnabled) {
     // ── 6. checkCached ────────────────────────────────────────────
     async function checkCached(hashes) {
         if (!Array.isArray(hashes) || hashes.length === 0) return {};
-
         try {
             const { data } = await tbApi.post('/torrents/checkcached', null, {
                 params: { hash: hashes }
