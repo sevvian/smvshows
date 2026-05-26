@@ -1,7 +1,7 @@
-// src/services/realdebrid.js
+// src/services/debrid/realdebrid.js
 const axios = require('axios');
-const logger = require('../utils/logger');
-const config = require('../config/config');
+const logger = require('../../utils/logger');
+const config = require('../../config/config');
 
 // --- START OF CHANGE ---
 // A custom error class to identify when a resource is expired or deleted on RD
@@ -15,7 +15,17 @@ class ResourceNotFoundError extends Error {
 
 if (!config.isRdEnabled) {
     logger.info('Real-Debrid service is disabled: No API key provided.');
-    module.exports = { isEnabled: false };
+    module.exports = {
+        isEnabled: false,
+        addMagnet: async () => { throw new Error('Real-Debrid is disabled.'); },
+        getTorrentInfo: async () => { throw new Error('Real-Debrid is disabled.'); },
+        selectFiles: async () => { throw new Error('Real-Debrid is disabled.'); },
+        unrestrictLink: async () => { throw new Error('Real-Debrid is disabled.'); },
+        addAndSelect: async () => { throw new Error('Real-Debrid is disabled.'); },
+        ResourceNotFoundError: class extends Error {
+            constructor(m) { super(m); this.name = 'ResourceNotFoundError'; }
+        }
+    };
 } else {
     const rdApi = axios.create({
         baseURL: 'https://api.real-debrid.com/rest/1.0',
