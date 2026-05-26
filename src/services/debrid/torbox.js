@@ -22,6 +22,7 @@ if (!config.isTorboxEnabled) {
         unrestrictLink: async () => { throw new Error('TorBox is disabled.'); },
         addAndSelect: async () => { throw new Error('TorBox is disabled.'); },
         checkCached: async () => { throw new Error('TorBox is disabled.'); },
+        setModels: () => {},
         ResourceNotFoundError: class extends Error {
             constructor(m) { super(m); this.name = 'ResourceNotFoundError'; }
         }
@@ -34,32 +35,53 @@ if (!config.isTorboxEnabled) {
         timeout: 15000
     });
 
-    // ── In-Memory Caches ──────────────────────────────────────────
-    // TorBox identifies torrents by hash, but our interface uses numeric IDs.
-    // We maintain these maps so the RD-shaped API works.
-    const torrentIdToHash = new Map();       // numeric id → hash
-    const torrentSelections = new Map();     // numeric id → Set<file_id>
-
-    // ── Helpers ───────────────────────────────────────────────────
+    // ── Persisted Mapping via TorboxIdMap Model ──────────────────
+    let TorboxIdMap = null;
 
     /**
-     * Fetch raw torrent info (no transformation, no link generation).
-     * Used internally by selectFiles('all') to get the full file list.
+     * Called by the database layer after models are initialized.
+     * Preloads existing torrent_id → hash mappings from the database
+     * so that restarts do not cause cache misses.
      */
+    function setModels(models) {
+        if (models && models.TorboxIdMap) {
+            TorboxIdMap = models.TorboxIdMap;
+            TorboxIdMap.findAll().then(rows => {
+                rows.forEach(r => torrentIdToHash.set(r.torrent_id, r.hash));
+                logger.info(`Loaded ${rows.length} torrent ID→hash mappings from TorboxIdMap.`);
+            }).catch(err => logger.warn('Could not preload TorboxIdMap:', err.message));
+        }
+    }
+
+    // ── In-Memory Caches ──────────────────────────────────────────
+    const torrentIdToHash = new Map();    // numeric id → hash
+    const torrentSelections = new Map();  // numeric id → Set<file_id>
+
+    // ── Helpers ───────────────────────────────────────────────────
     async function fetchRawTorrentInfo(numericId) {
-        const hash = torrentIdToHash.get(numericId);
-        if (!hash) throw new ResourceNotFoundError(`Torrent ID ${numericId} not found in local cache.`);
+        // First try in-memory cache
+        let hash = torrentIdToHash.get(numericId);
+
+        // If not in memory, try to recover from DB
+        if (!hash && TorboxIdMap) {
+            try {
+                const row = await TorboxIdMap.findByPk(numericId);
+                if (row) {
+                    hash = row.hash;
+                    torrentIdToHash.set(numericId, hash);
+                }
+            } catch (e) {
+                logger.warn({ numericId, err: e.message }, 'Failed to recover hash from TorboxIdMap.');
+            }
+        }
+
+        if (!hash) throw new ResourceNotFoundError(`Torrent ID ${numericId} not found.`);
+
         const { data } = await tbApi.get('/torrents/torrentinfo', { params: { hash } });
-        // TorBox API wraps responses in { success, data, ... } sometimes,
-        // but the raw endpoint may return differently. Normalize:
         const payload = data.data || data;
         return payload;
     }
 
-    /**
-     * Request a single download link for a torrent+file combination.
-     * Uses redirect=false to get JSON instead of a 302.
-     */
     async function requestDownloadLink(torrentId, fileId) {
         const { data } = await tbApi.get('/torrents/requestdl', {
             params: {
@@ -69,14 +91,10 @@ if (!config.isTorboxEnabled) {
                 redirect: false
             }
         });
-        // Normalize: response may be { data: { url: "..." } } or { url: "..." }
         const payload = data.data || data;
         return payload.url || payload;
     }
 
-    /**
-     * Map TorBox status strings to Real-Debrid equivalents.
-     */
     function mapStatus(tbStatus) {
         const s = (tbStatus || '').toLowerCase();
         if (s === 'downloading' || s === 'metadl' || s === 'checkingresumedata') return 'downloading';
@@ -94,10 +112,17 @@ if (!config.isTorboxEnabled) {
             const response = await tbApi.post('/torrents/createtorrent', formData, {
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
             });
-            // Normalize response
             const payload = response.data.data || response.data;
             if (payload && payload.id && payload.hash) {
                 torrentIdToHash.set(payload.id, payload.hash);
+                // Persist mapping to DB for survival across restarts
+                if (TorboxIdMap) {
+                    try {
+                        await TorboxIdMap.upsert({ torrent_id: payload.id, hash: payload.hash });
+                    } catch (e) {
+                        logger.warn({ torrent_id: payload.id, err: e.message }, 'Failed to persist TorboxIdMap.');
+                    }
+                }
             }
             return { id: payload.id, hash: payload.hash, name: payload.name, ...payload };
         } catch (error) {
@@ -109,22 +134,17 @@ if (!config.isTorboxEnabled) {
     // ── 2. getTorrentInfo ─────────────────────────────────────────
     async function getTorrentInfo(id) {
         try {
-            const hash = torrentIdToHash.get(id);
-            if (!hash) throw new ResourceNotFoundError(`Torrent ID ${id} not found.`);
-
             const payload = await fetchRawTorrentInfo(id);
             const tbStatus = mapStatus(payload.status || payload.state);
 
-            // Build files array in RD format
             const selectedSet = torrentSelections.get(id) || new Set();
             const files = (payload.files || []).map(f => ({
                 id: f.id,
-                path: f.name,          // TorBox uses 'name'; RD uses 'path'
+                path: f.name,
                 bytes: f.size,
                 selected: selectedSet.size === 0 || selectedSet.has(f.id) ? 1 : 0
             }));
 
-            // Generate download links for selected files when ready
             const links = [];
             if (tbStatus === 'downloaded') {
                 const fileIdsToLink = selectedSet.size > 0
@@ -132,8 +152,7 @@ if (!config.isTorboxEnabled) {
                     : (payload.files || []).map(f => f.id);
                 for (const fid of fileIdsToLink) {
                     try {
-                        const dlUrl = await requestDownloadLink(id, fid);
-                        links.push(dlUrl);
+                        links.push(await requestDownloadLink(id, fid));
                     } catch (e) {
                         logger.warn({ torrentId: id, fileId: fid, err: e.message }, 'Failed to get download link.');
                         links.push(null);
@@ -141,13 +160,7 @@ if (!config.isTorboxEnabled) {
                 }
             }
 
-            return {
-                id: id,
-                filename: payload.name,
-                status: tbStatus,
-                files: files,
-                links: links
-            };
+            return { id, filename: payload.name, status: tbStatus, files, links };
         } catch (error) {
             if (error instanceof ResourceNotFoundError) throw error;
             if (error.response?.status === 404) {
@@ -184,13 +197,10 @@ if (!config.isTorboxEnabled) {
 
     // ── 4. unrestrictLink ─────────────────────────────────────────
     async function unrestrictLink(link) {
-        // TorBox direct download links are already "unrestricted."
-        // If the caller passes a URL, wrap it in the RD response shape.
         if (link && (link.startsWith('http://') || link.startsWith('https://'))) {
             return { download: link };
         }
-        // TorBox does not support hoster link unrestriction.
-        logger.warn('unrestrictLink called with non-URL input; TorBox does not support hoster unrestriction.');
+        logger.warn('TorBox does not support hoster link unrestriction.');
         throw new Error('TorBox does not support hoster link unrestriction.');
     }
 
@@ -211,21 +221,13 @@ if (!config.isTorboxEnabled) {
     }
 
     // ── 6. checkCached ────────────────────────────────────────────
-    /**
-     * Batch-check torrent cache status using TorBox's /checkcached endpoint.
-     * @param {string[]} hashes - Array of info hashes to check
-     * @returns {Promise<object>} - { [hash]: true | false }
-     */
     async function checkCached(hashes) {
+        if (!Array.isArray(hashes) || hashes.length === 0) return {};
+
         try {
-            if (!Array.isArray(hashes) || hashes.length === 0) {
-                return {};
-            }
-            // TorBox checkcached accepts hash as query param (can be repeated)
             const { data } = await tbApi.post('/torrents/checkcached', null, {
                 params: { hash: hashes }
             });
-            // Normalize: response may be { data: { "hash": true/false } } or directly the object
             const payload = data.data || data;
             const result = {};
             for (const hash of hashes) {
@@ -234,7 +236,6 @@ if (!config.isTorboxEnabled) {
             return result;
         } catch (error) {
             logger.error({ err: error.response?.data || error.message }, 'Failed to check cached on TorBox.');
-            // Return all false on error
             const empty = {};
             hashes.forEach(h => empty[h] = false);
             return empty;
@@ -250,6 +251,7 @@ if (!config.isTorboxEnabled) {
         unrestrictLink,
         addAndSelect,
         checkCached,
+        setModels,
         ResourceNotFoundError
     };
 }
