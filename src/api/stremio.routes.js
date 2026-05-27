@@ -81,25 +81,25 @@ router.get('/manifest.json', (req, res) => {
         resources: ['catalog', 'meta', 'stream'],
         types: ['series', 'movie'],
         catalogs: [
-    {
-        type: 'series',
-        id: 'tamilmv_series',
-        name: 'Tamil WebSeries',
-        extra: [{ name: 'skip', isRequired: false }]
-    },
-    {
-        type: 'movie',
-        id: 'tamilmv_hd_movies',
-        name: 'Tamil HD Movies',
-        extra: [{ name: 'skip', isRequired: false }]
-    },
-    {
-        type: 'movie',
-        id: 'tamilmv_dubbed_movies',
-        name: 'Tamil HD Dubbed Movies',
-        extra: [{ name: 'skip', isRequired: false }]
-    }
-],
+            {
+                type: 'series',
+                id: 'tamilmv_series',
+                name: 'Tamil WebSeries',
+                extra: [{ name: 'skip', isRequired: false }]
+            },
+            {
+                type: 'movie',
+                id: 'tamilmv_hd_movies',
+                name: 'Tamil HD Movies',
+                extra: [{ name: 'skip', isRequired: false }]
+            },
+            {
+                type: 'movie',
+                id: 'tamilmv_dubbed_movies',
+                name: 'Tamil HD Dubbed Movies',
+                extra: [{ name: 'skip', isRequired: false }]
+            }
+        ],
         idPrefixes: ['tt']
     };
     res.json(manifest);
@@ -109,7 +109,6 @@ router.get('/manifest.json', (req, res) => {
 router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     const { type, id } = req.params;
 
-    // Support both path‑based skip (/skip=N.json) and query‑string (?skip=N)
     let skip = parseInt(req.query.skip || '0', 10);
     if (req.params.extra && req.params.extra.startsWith('skip=')) {
         skip = parseInt(req.params.extra.split('=')[1] || '0', 10);
@@ -117,7 +116,6 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
 
     const limit = 100;
 
-    // Map catalog id → Thread.catalog value (as saved by the crawler)
     const catalogMap = {
         tamilmv_series: 'top-series-from-forum',
         tamilmv_hd_movies: 'tamil-hd-movies',
@@ -129,7 +127,6 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
         return res.status(404).json({ err: 'Catalog not found' });
     }
 
-    // Validate type consistency
     if (id === 'tamilmv_series' && type !== 'series') {
         return res.status(404).json({ err: 'Catalog not found' });
     }
@@ -140,14 +137,14 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
     try {
         const whereClause = {
             type,
-            catalog: catalogValue      // ← filters by the catalog assigned during scraping
+            catalog: catalogValue
         };
 
         const allThreads = await models.Thread.findAll({
             where: whereClause,
             include: [{
                 model: models.TmdbMetadata,
-                required: false        // LEFT JOIN – keeps threads without metadata
+                required: false
             }],
             order: [
                 [sequelize.literal("CASE `Thread`.`status` WHEN 'linked' THEN 0 ELSE 1 END"), 'ASC'],
@@ -158,7 +155,6 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
         });
 
         const metas = allThreads.map(thread => {
-            // Linked item with TMDB metadata
             if (thread.status === 'linked' && thread.TmdbMetadatum && thread.TmdbMetadatum.imdb_id) {
                 const meta = thread.TmdbMetadatum;
                 const data = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
@@ -175,8 +171,6 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
                     genres: (data.genres || []).map(g => (typeof g === 'string' ? g : g.name)),
                 };
             }
-
-            // Pending item (matching v1.0 behaviour)
             if (thread.status === 'pending_tmdb') {
                 return {
                     id: `${config.addonId}:pending:${thread.id}`,
@@ -186,7 +180,6 @@ router.get('/catalog/:type/:id/:extra?.json', async (req, res) => {
                     description: thread.custom_description || 'This item is pending an official metadata match.'
                 };
             }
-
             return null;
         }).filter(Boolean);
 
@@ -441,10 +434,41 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
 
             await upsertDebridSnapshot(infohash, torrentId, info);
 
-            if (Array.isArray(info.files) && Array.isArray(info.links) && info.links.length > 0
-                && (info.status || '').toLowerCase() === 'downloaded') {
-                const link = await pickAndUnrestrict(info, requestedEpisode);
-                if (link) return redirectTo(res, link);
+            if (Array.isArray(info.files) && info.files.length > 0 &&
+                (info.status || '').toLowerCase() === 'downloaded') {
+
+                // ── v3.0.1: Single‑file download link (TorBox) ──
+                let downloadUrl = null;
+
+                // 1. Find the right file index
+                let fileIndex = -1;
+                if (requestedEpisode && requestedEpisode > 0) {
+                    const match = tryMatchEpisode(info.files, requestedEpisode);
+                    if (match) fileIndex = match.index;
+                }
+                if (fileIndex === -1) {
+                    const largest = pickLargestVideo(info.files);
+                    if (largest) {
+                        fileIndex = info.files.findIndex(f => f.path === largest.path);
+                    }
+                }
+
+                // 2. Request single link if provider supports it
+                if (fileIndex !== -1 && typeof debrid.getDownloadLinkForFile === 'function') {
+                    try {
+                        downloadUrl = await debrid.getDownloadLinkForFile(torrentId, fileIndex);
+                    } catch (e) {
+                        logger.warn({ torrentId, fileIndex, err: e.message }, 'Single file download link failed, falling back to unrestrict.');
+                    }
+                }
+
+                // 3. Fallback to stored links (Real‑Debrid)
+                if (!downloadUrl && Array.isArray(info.links) && info.links[fileIndex]) {
+                    const unrestricted = await debrid.unrestrictLink(info.links[fileIndex]);
+                    downloadUrl = unrestricted?.download || null;
+                }
+
+                if (downloadUrl) return redirectTo(res, downloadUrl);
             }
         }
 
@@ -541,7 +565,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
 
             const dbStreams = await models.Stream.findAll({ where: whereClause });
 
-            // ── BATCH CACHE CHECK (v3.0) ──────────────────────────
+            // ── BATCH CACHE CHECK ──────────────────────────────────
             let cacheStatus = {};
             if (debrid.isEnabled && dbStreams.length > 0) {
                 const allHashes = [...new Set(dbStreams.map(s => s.infohash))];
@@ -637,7 +661,6 @@ router.get('/stream/:type/:id.json', async (req, res) => {
                     }
                 }
             } else {
-                // P2P only
                 const data = (typeof meta.data === 'string') ? JSON.parse(meta.data) : meta.data;
                 if (type === 'movie') {
                     for (const s of dbStreams) {
