@@ -19,15 +19,22 @@ if (models.Thread && models.TmdbMetadata) {
 
 const syncDb = async () => {
     try {
-        // FIX: Removed `{ alter: true }`. This prevents Sequelize from trying to
-        // perform a data migration that fails on existing, invalid data.
-        // On startup, it will now simply ensure the tables exist as defined.
-        await sequelize.sync(); 
+        await sequelize.sync();
         logger.info('Database & tables verified successfully.');
+
+        // After DB sync, tell the debrid provider about the TorboxIdMap model
+        try {
+            const debridFactory = require('../services/debrid');
+            const provider = debridFactory.getProvider();
+            if (provider && typeof provider.setModels === 'function') {
+                provider.setModels(models);
+                logger.info('Debrid provider models set successfully.');
+            }
+        } catch (e) {
+            logger.warn('Could not set models on debrid provider:', e.message);
+        }
     } catch (error) {
         logger.error(error, 'Error synchronizing database:');
-        // We throw the error here to ensure the application does not start
-        // with a faulty database connection.
         throw error;
     }
 };

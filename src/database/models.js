@@ -1,6 +1,8 @@
+// src/database/models.js
 const { DataTypes } = require('sequelize');
 
 module.exports = (sequelize) => {
+    // ── Thread ────────────────────────────────────────────────────
     const Thread = sequelize.define('Thread', {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         thread_hash: { type: DataTypes.STRING, unique: true, allowNull: false },
@@ -16,8 +18,8 @@ module.exports = (sequelize) => {
         custom_poster: { type: DataTypes.STRING, allowNull: true },
         custom_description: { type: DataTypes.TEXT, allowNull: true },
         last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { 
-        tableName: 'threads', 
+    }, {
+        tableName: 'threads',
         timestamps: true,
         indexes: [
             { fields: ['status'] },
@@ -29,20 +31,22 @@ module.exports = (sequelize) => {
         ]
     });
 
+    // ── TmdbMetadata ──────────────────────────────────────────────
     const TmdbMetadata = sequelize.define('TmdbMetadata', {
         tmdb_id: { type: DataTypes.STRING, primaryKey: true },
         imdb_id: { type: DataTypes.STRING, unique: true },
         year: { type: DataTypes.INTEGER, index: true },
         data: { type: DataTypes.JSON, allowNull: false },
-    }, { 
-        tableName: 'tmdb_metadata', 
+    }, {
+        tableName: 'tmdb_metadata',
         timestamps: true,
         indexes: [
             { unique: true, fields: ['imdb_id'] },
             { fields: ['year'] },
         ]
     });
-    
+
+    // ── Stream ────────────────────────────────────────────────────
     const Stream = sequelize.define('Stream', {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         tmdb_id: { type: DataTypes.STRING, allowNull: false },
@@ -52,8 +56,8 @@ module.exports = (sequelize) => {
         infohash: { type: DataTypes.STRING, allowNull: false, unique: true },
         quality: DataTypes.STRING,
         language: DataTypes.STRING,
-    }, { 
-        tableName: 'streams', 
+    }, {
+        tableName: 'streams',
         timestamps: true,
         indexes: [
             { unique: true, fields: ['tmdb_id', 'season', 'episode', 'infohash'] },
@@ -64,34 +68,62 @@ module.exports = (sequelize) => {
         ]
     });
 
-    const RdTorrent = sequelize.define('RdTorrent', {
-        infohash: { type: DataTypes.STRING, primaryKey: true },
-        rd_id: { type: DataTypes.STRING, allowNull: false, unique: true },
-        status: { type: DataTypes.STRING, allowNull: false },
-        files: { type: DataTypes.JSON, allowNull: true },
-        links: { type: DataTypes.JSON, allowNull: true },
-        last_checked: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { tableName: 'rd_torrents', timestamps: true });
-
+    // ── FailedThread ──────────────────────────────────────────────
     const FailedThread = sequelize.define('FailedThread', {
         thread_hash: { type: DataTypes.STRING, primaryKey: true },
         raw_title: DataTypes.STRING,
         reason: DataTypes.STRING,
         last_attempt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { tableName: 'failed_threads', timestamps: false, indexes: [{ fields: ['last_attempt'] }] });
+    }, {
+        tableName: 'failed_threads',
+        timestamps: false,
+        indexes: [{ fields: ['last_attempt'] }]
+    });
 
-    // New: lock table for RD cache to avoid duplicates
-    const RdCacheLock = sequelize.define('RdCacheLock', {
+    // ── DebridTorrent (was RdTorrent) ─────────────────────────────
+    const DebridTorrent = sequelize.define('DebridTorrent', {
+        infohash: { type: DataTypes.STRING, primaryKey: true },
+        torrent_id: { type: DataTypes.STRING, allowNull: false, unique: true },
+        provider: { type: DataTypes.STRING, allowNull: false, defaultValue: 'realdebrid' },
+        status: { type: DataTypes.STRING, allowNull: false },
+        files: { type: DataTypes.JSON, allowNull: true },
+        links: { type: DataTypes.JSON, allowNull: true },
+        last_checked: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    }, {
+        tableName: 'debrid_torrents',
+        timestamps: true
+    });
+
+    // ── DebridCacheLock (was RdCacheLock) ─────────────────────────
+    const DebridCacheLock = sequelize.define('DebridCacheLock', {
         infohash: { type: DataTypes.STRING, primaryKey: true },
         createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { tableName: 'rd_cache_locks', timestamps: false });
+    }, {
+        tableName: 'debrid_cache_locks',
+        timestamps: false
+    });
 
-    // New: Magnet cache for linked items (infohash -> magnet)
+    // ── MagnetCache ───────────────────────────────────────────────
     const MagnetCache = sequelize.define('MagnetCache', {
         infohash: { type: DataTypes.STRING, primaryKey: true },
         magnet: { type: DataTypes.TEXT, allowNull: false },
         createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-    }, { tableName: 'magnet_cache', timestamps: false });
+    }, {
+        tableName: 'magnet_cache',
+        timestamps: false
+    });
 
-    return { Thread, TmdbMetadata, Stream, FailedThread, RdTorrent, RdCacheLock, MagnetCache };
+    // ── TorboxIdMap (NEW — persists torrent_id → hash for TorBox) ─
+    const TorboxIdMap = sequelize.define('TorboxIdMap', {
+        torrent_id: { type: DataTypes.INTEGER, primaryKey: true },
+        hash: { type: DataTypes.STRING, allowNull: false, unique: true },
+    }, {
+        tableName: 'torbox_id_map',
+        timestamps: false
+    });
+
+    return {
+        Thread, TmdbMetadata, Stream, FailedThread,
+        DebridTorrent, DebridCacheLock, MagnetCache, TorboxIdMap
+    };
 };
