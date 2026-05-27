@@ -40,7 +40,7 @@ function createDisabledProvider() {
     };
 }
 
-// ── Unified checkCached ─────────────────────────────────────────
+// ── Unified checkCached (supports enriched results from TorBox) ──
 async function unifiedCheckCached(hashes, models) {
     const provider = getProvider();
 
@@ -48,12 +48,17 @@ async function unifiedCheckCached(hashes, models) {
     if (provider.isEnabled && typeof provider.checkCached === 'function') {
         try {
             const result = await provider.checkCached(hashes);
-            // If the result is completely empty (but we expected hashes), something went wrong – fallback
             if (Object.keys(result).length === 0 && hashes.length > 0) {
                 logger.warn('Provider checkCached returned empty result, falling back to DB.');
             } else {
                 logger.debug(`[checkCached] Provider returned instant results.`);
-                return result;
+                // Normalize: if provider returns {cached, files} objects,
+                // convert to boolean for stream endpoint
+                const normalized = {};
+                for (const [hash, info] of Object.entries(result)) {
+                    normalized[hash] = typeof info === 'object' ? info.cached : !!info;
+                }
+                return normalized;
             }
         } catch (err) {
             logger.warn({ err: err.message }, '[checkCached] Provider checkCached failed, falling back to DB.');
