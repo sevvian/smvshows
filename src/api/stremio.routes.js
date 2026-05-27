@@ -326,11 +326,56 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
     const requestedEpisode = parseInt(req.params.episode || '1', 10);
 
     try {
-        // Fast path: local cached debrid snapshot with links/files
+        // Fast path: local cached debrid snapshot with files
         let cached = await models.DebridTorrent.findByPk(infohash);
-        if (cached && Array.isArray(cached.files) && Array.isArray(cached.links) && cached.links.length > 0) {
-            const link = await pickAndUnrestrict(cached, requestedEpisode);
-            if (link) return redirectTo(res, link);
+        if (cached && Array.isArray(cached.files) && cached.links && cached.torrent_id) {
+            // ── v3.0.2: Try cache‑based file info first (TorBox) ──
+            let downloadUrl = null;
+
+            // Determine the file index for the requested episode
+            let fileIndex = -1;
+            if (requestedEpisode && requestedEpisode > 0) {
+                const match = tryMatchEpisode(cached.files, requestedEpisode);
+                if (match) fileIndex = match.index;
+            }
+            if (fileIndex === -1) {
+                const largest = pickLargestVideo(cached.files);
+                if (largest) fileIndex = cached.files.findIndex(f => f.path === largest.path);
+            }
+
+            // 1. Try getCachedFileInfo (returns real file ID from TorBox checkCached)
+            if (fileIndex !== -1 && typeof debrid.getCachedFileInfo === 'function') {
+                try {
+                    const fileInfo = await debrid.getCachedFileInfo(infohash, fileIndex);
+                    if (fileInfo && fileInfo.id !== undefined && cached.torrent_id) {
+                        downloadUrl = await debrid.getDownloadLinkForFile(
+                            cached.torrent_id, fileInfo.id
+                        );
+                    }
+                } catch (e) {
+                    logger.warn({ infohash, fileIndex, err: e.message },
+                        'getCachedFileInfo failed, trying stored links...');
+                }
+            }
+
+            // 2. Fallback: try stored link
+            if (!downloadUrl && cached.links[fileIndex]) {
+                try {
+                    const unrestricted = await debrid.unrestrictLink(cached.links[fileIndex]);
+                    downloadUrl = unrestricted?.download || null;
+                } catch (e) { /* ignore */ }
+            }
+
+            // 3. Last resort: generate link on the fly (TorBox)
+            if (!downloadUrl && fileIndex !== -1 &&
+                typeof debrid.getDownloadLinkForFile === 'function' && cached.torrent_id) {
+                try {
+                    downloadUrl = await debrid.getDownloadLinkForFile(cached.torrent_id, fileIndex);
+                } catch (e) { /* ignore */ }
+            }
+
+            if (downloadUrl) return redirectTo(res, downloadUrl);
+            // Fall through to normal polling if still no link
         }
 
         // Ensure this infohash is indexed
@@ -438,10 +483,9 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
             if (Array.isArray(info.files) && info.files.length > 0 &&
                 (info.status || '').toLowerCase() === 'downloaded') {
 
-                // ── v3.0.1: Single‑file download link (TorBox) ──
+                // ── Single‑file download link ──
                 let downloadUrl = null;
 
-                // 1. Find the right file index
                 let fileIndex = -1;
                 if (requestedEpisode && requestedEpisode > 0) {
                     const match = tryMatchEpisode(info.files, requestedEpisode);
@@ -449,12 +493,9 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
                 }
                 if (fileIndex === -1) {
                     const largest = pickLargestVideo(info.files);
-                    if (largest) {
-                        fileIndex = info.files.findIndex(f => f.path === largest.path);
-                    }
+                    if (largest) fileIndex = info.files.findIndex(f => f.path === largest.path);
                 }
 
-                // Log the matched file info for visual confirmation
                 if (fileIndex !== -1 && info.files[fileIndex]) {
                     logger.info({
                         requestedEpisode,
@@ -464,16 +505,15 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
                     }, 'Episode matched to file in torrent');
                 }
 
-                // 2. Request single link if provider supports it
                 if (fileIndex !== -1 && typeof debrid.getDownloadLinkForFile === 'function') {
                     try {
                         downloadUrl = await debrid.getDownloadLinkForFile(torrentId, fileIndex);
                     } catch (e) {
-                        logger.warn({ torrentId, fileIndex, err: e.message }, 'Single file download link failed, falling back to unrestrict.');
+                        logger.warn({ torrentId, fileIndex, err: e.message },
+                            'Single file download link failed, falling back to unrestrict.');
                     }
                 }
 
-                // 3. Fallback to stored links (Real‑Debrid)
                 if (!downloadUrl && Array.isArray(info.links) && info.links[fileIndex]) {
                     const unrestricted = await debrid.unrestrictLink(info.links[fileIndex]);
                     downloadUrl = unrestricted?.download || null;
@@ -576,7 +616,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
 
             const dbStreams = await models.Stream.findAll({ where: whereClause });
 
-            // ── BATCH CACHE CHECK ──────────────────────────────────
+            // ── BATCH CACHE CHECK (now returns enriched results for TorBox, normalized to boolean) ──
             let cacheStatus = {};
             if (debrid.isEnabled && dbStreams.length > 0) {
                 const allHashes = [...new Set(dbStreams.map(s => s.infohash))];
