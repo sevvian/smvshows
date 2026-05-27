@@ -23,6 +23,7 @@ if (!config.isTorboxEnabled) {
         unrestrictLink: async () => { throw new Error('TorBox is disabled.'); },
         addAndSelect: async () => { throw new Error('TorBox is disabled.'); },
         checkCached: async () => { throw new Error('TorBox is disabled.'); },
+        getCachedFileInfo: async () => { throw new Error('TorBox is disabled.'); },
         getDownloadLinkForFile: async () => { throw new Error('TorBox is disabled.'); },
         setModels: () => {},
         ResourceNotFoundError: class extends Error {
@@ -89,35 +90,20 @@ if (!config.isTorboxEnabled) {
         'stalled (no seeds)', 'paused', 'error', 'failed', 'missingfiles', 'expired'
     ]);
 
-    /**
-     * Count torrents in "active" states (consuming a download/seeding slot).
-     * Returns { count, staleList } where staleList is torrent IDs that can be removed.
-     */
     async function getActiveTorrentCount() {
         try {
             const { data } = await tbApi.get('/torrents/mylist');
-            logger.debug({ mylistResponse: JSON.stringify(data).substring(0, 500) }, 'TorBox mylist raw response');
             const list = data.data || data;
             if (!Array.isArray(list)) return { count: -1, staleList: [] };
-
             const active = list.filter(t => ACTIVE_STATES.has((t.status || '').toLowerCase()));
             const stale = active.filter(t => STALE_STATES.has((t.status || '').toLowerCase()));
-
-            logger.info({ activeCount: active.length, staleCount: stale.length },
-                'TorBox active torrent count');
-            return {
-                count: active.length,
-                staleList: stale.map(t => t.id)
-            };
+            return { count: active.length, staleList: stale.map(t => t.id) };
         } catch (e) {
             logger.warn({ err: e.message }, 'Failed to count active torrents via /mylist.');
             return { count: -1, staleList: [] };
         }
     }
 
-    /**
-     * Delete a torrent by ID using POST /torrents/controltorrent.
-     */
     async function deleteTorrent(torrentId) {
         try {
             logger.info({ torrentId }, 'Deleting torrent from TorBox...');
@@ -127,8 +113,6 @@ if (!config.isTorboxEnabled) {
             const response = await tbApi.post('/torrents/controltorrent', form, {
                 headers: form.getHeaders()
             });
-            logger.info({ responseData: JSON.stringify(response.data).substring(0, 200) },
-                'TorBox controltorrent (delete) response');
             return true;
         } catch (error) {
             logger.warn({ torrentId, err: error.message }, 'Failed to delete torrent from TorBox.');
@@ -136,31 +120,21 @@ if (!config.isTorboxEnabled) {
         }
     }
 
-    /**
-     * If active torrent count is at or above maxActive, remove stale torrents
-     * (stalled, paused, errored, failed, missingfiles, expired) to make room.
-     * Removes oldest stale torrents first until we're under the limit.
-     */
     async function cleanupStaleActiveTorrents(maxActive) {
-        if (maxActive <= 0) return; // no limit configured
-
+        if (maxActive <= 0) return;
         const { count, staleList } = await getActiveTorrentCount();
-        if (count < 0 || count < maxActive) return; // under limit or unknown
-
-        const needToRemove = count - maxActive + 1; // +1 to make room for the new one
+        if (count < 0 || count < maxActive) return;
+        const needToRemove = count - maxActive + 1;
         const toRemove = staleList.slice(0, Math.min(needToRemove, staleList.length));
-
         if (toRemove.length === 0) {
             logger.warn({ activeCount: count, maxActive },
                 'All active torrent slots are full and no stale torrents to remove.');
             return;
         }
-
         logger.info({ activeCount: count, maxActive, removing: toRemove },
             'Cleaning up stale active torrents to make room.');
         for (const id of toRemove) {
             await deleteTorrent(id);
-            // Also clean up local mapping
             torrentIdToHash.delete(id);
         }
     }
@@ -171,10 +145,7 @@ if (!config.isTorboxEnabled) {
         if (!hash && TorboxIdMap) {
             try {
                 const row = await TorboxIdMap.findByPk(numericId);
-                if (row) {
-                    hash = row.hash;
-                    torrentIdToHash.set(numericId, hash);
-                }
+                if (row) { hash = row.hash; torrentIdToHash.set(numericId, hash); }
             } catch (e) {
                 logger.warn({ numericId, err: e.message }, 'Failed to recover hash from TorboxIdMap.');
             }
@@ -183,7 +154,6 @@ if (!config.isTorboxEnabled) {
 
         logger.info({ torrentId: numericId, hash }, 'Requesting torrent info from TorBox...');
         const { data } = await tbApi.get('/torrents/torrentinfo', { params: { hash } });
-        logger.info({ torrentinfoFullResponse: JSON.stringify(data).substring(0, 2000) }, 'TorBox torrentinfo FULL raw response');
         const payload = data.data || data;
         return payload;
     }
@@ -192,14 +162,12 @@ if (!config.isTorboxEnabled) {
         try {
             logger.info({ torrentId }, 'Requesting torrent status from TorBox via /mylist...');
             const { data } = await tbApi.get('/torrents/mylist', { params: { id: torrentId } });
-            logger.info({ mylistResponse: JSON.stringify(data).substring(0, 500) }, 'TorBox mylist raw response for single ID');
             const list = data.data || data;
             const item = Array.isArray(list) ? list[0] : list;
             const rawStatus = item ? (item.download_state || item.status || 'MISSING') : 'MISSING';
-            logger.info({ torrentId, rawStatus }, 'TorBox torrent status retrieved');
             return rawStatus;
         } catch (error) {
-            logger.warn({ torrentId, err: error.message }, 'Failed to fetch torrent status via /mylist, falling back to MISSING');
+            logger.warn({ torrentId, err: error.message }, 'Failed to fetch torrent status via /mylist');
             return 'MISSING';
         }
     }
@@ -209,7 +177,6 @@ if (!config.isTorboxEnabled) {
         const { data } = await tbApi.get('/torrents/requestdl', {
             params: { token: config.torboxApiKey, torrent_id: torrentId, file_id: fileId, redirect: false }
         });
-        logger.info({ requestdlResponse: JSON.stringify(data).substring(0, 300) }, 'TorBox requestdl raw response');
         const payload = data.data || data;
         return payload.url || payload;
     }
@@ -237,7 +204,6 @@ if (!config.isTorboxEnabled) {
             throw new Error('TorBox addMagnet rate limit exceeded. Please wait and retry.');
         }
 
-        // ── Active slot cleanup before adding ──
         const maxActive = parseInt(process.env.TORBOX_MAX_ACTIVE_TORRENTS, 10) || 0;
         if (maxActive > 0) {
             await cleanupStaleActiveTorrents(maxActive);
@@ -281,12 +247,7 @@ if (!config.isTorboxEnabled) {
                 lastError = error;
                 const errCode = (error.response?.data || {}).error || '';
                 if (errCode === 'ACTIVE_LIMIT') {
-                    if (attempt < 2) {
-                        const waitMs = 5000 * Math.pow(2, attempt);
-                        logger.warn({ errCode, attempt, waitMs }, 'TorBox ACTIVE_LIMIT error. Retrying after backoff.');
-                        await sleep(waitMs);
-                        continue;
-                    }
+                    if (attempt < 2) { await sleep(5000 * Math.pow(2, attempt)); continue; }
                 }
                 break;
             }
@@ -294,7 +255,7 @@ if (!config.isTorboxEnabled) {
         throw lastError || new Error('Failed to add magnet to TorBox.');
     }
 
-    // ── 2. getTorrentInfo (retains full file list for DB snapshot) ─
+    // ── 2. getTorrentInfo ─────────────────────────────────────────
     async function getTorrentInfo(id) {
         try {
             const payload = await fetchRawTorrentInfo(id);
@@ -364,33 +325,75 @@ if (!config.isTorboxEnabled) {
         }
     }
 
-    // ── 6. checkCached ────────────────────────────────────────────
+    // ── 6. checkCached (NOW WITH list_files=true) ───────────────
     async function checkCached(hashes) {
         if (!Array.isArray(hashes) || hashes.length === 0) return {};
+
         try {
-            const { data } = await tbApi.post('/torrents/checkcached', null, { params: { hash: hashes } });
-            logger.info({ checkCachedResponse: JSON.stringify(data).substring(0, 300) }, 'TorBox checkCached raw response');
+            const { data } = await tbApi.post('/torrents/checkcached', null, {
+                params: {
+                    hash: hashes,
+                    format: 'object',
+                    list_files: true   // ✅ Request file info for cached torrents
+                }
+            });
+            logger.info({ checkCachedResponse: JSON.stringify(data).substring(0, 500) }, 'TorBox checkCached raw response');
+
             let payload = data.data || data;
             if (Array.isArray(payload)) payload = payload[0] || {};
+
             const result = {};
             for (const hash of hashes) {
                 const value = payload[hash];
-                result[hash] = typeof value === 'object' ? true : !!value;
+                if (typeof value === 'object' && value !== null) {
+                    // Contains file info: { name, size, hash, files: [{id, name, size, ...}] }
+                    result[hash] = {
+                        cached: true,
+                        name: value.name,
+                        size: value.size,
+                        files: value.files || []   // ← includes actual file IDs!
+                    };
+                } else {
+                    result[hash] = { cached: !!value, files: [] };
+                }
             }
+
+            const cachedCount = Object.values(result).filter(v => v.cached).length;
+            logger.info({ hashCount: hashes.length, cachedCount }, 'TorBox checkCached result');
             return result;
+
         } catch (error) {
             logger.error({ err: error.message }, 'Failed to check cached on TorBox.');
-            return {};
+            const empty = {};
+            hashes.forEach(h => empty[h] = { cached: false, files: [] });
+            return empty;
         }
     }
 
-    // ── 7. getDownloadLinkForFile (single file download) ──────────
+    // ── 7. getCachedFileInfo (NEW: extract file info from cache) ─
+    async function getCachedFileInfo(hash, fileIndex) {
+        const cacheResult = await checkCached([hash]);
+        const info = cacheResult[hash];
+        if (!info || !info.cached || !Array.isArray(info.files)) return null;
+
+        const file = info.files[fileIndex];
+        if (!file) return null;
+
+        return {
+            id: file.id,          // ✅ Real file ID from TorBox
+            path: file.name,
+            bytes: file.size,
+            torrentName: info.name,
+            torrentSize: info.size
+        };
+    }
+
+    // ── 8. getDownloadLinkForFile (single file download) ──────────
     async function getDownloadLinkForFile(torrentId, fileId) {
         logger.info({ torrentId, fileId }, 'Requesting single file download link from TorBox...');
         const { data } = await tbApi.get('/torrents/requestdl', {
             params: { token: config.torboxApiKey, torrent_id: torrentId, file_id: fileId, redirect: false }
         });
-        logger.info({ requestdlResponse: JSON.stringify(data).substring(0, 300) }, 'TorBox single requestdl raw response');
         const payload = data.data || data;
         return payload.url || payload;
     }
@@ -404,6 +407,7 @@ if (!config.isTorboxEnabled) {
         unrestrictLink,
         addAndSelect,
         checkCached,
+        getCachedFileInfo,
         setModels,
         getDownloadLinkForFile,
         ResourceNotFoundError
