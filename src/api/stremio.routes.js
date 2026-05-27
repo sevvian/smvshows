@@ -343,10 +343,14 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
                 if (largest) fileIndex = cached.files.findIndex(f => f.path === largest.path);
             }
 
-            // 1. Try getCachedFileInfo (returns real file ID from TorBox checkCached)
-            if (fileIndex !== -1 && typeof debrid.getCachedFileInfo === 'function') {
+            // 1. Try getCachedFileInfo using the FILE NAME (reliable ordering)
+            if (fileIndex !== -1 && cached.files[fileIndex] &&
+                typeof debrid.getCachedFileInfo === 'function') {
                 try {
-                    const fileInfo = await debrid.getCachedFileInfo(infohash, fileIndex);
+                    const matchedFile = cached.files[fileIndex];
+                    // Extract simple file name from the stored full path
+                    const simpleName = matchedFile.path.split('/').pop();
+                    const fileInfo = await debrid.getCachedFileInfo(infohash, simpleName);
                     if (fileInfo && fileInfo.id !== undefined && cached.torrent_id) {
                         downloadUrl = await debrid.getDownloadLinkForFile(
                             cached.torrent_id, fileInfo.id
@@ -616,7 +620,7 @@ router.get('/stream/:type/:id.json', async (req, res) => {
 
             const dbStreams = await models.Stream.findAll({ where: whereClause });
 
-            // ── BATCH CACHE CHECK (now returns enriched results for TorBox, normalized to boolean) ──
+            // ── BATCH CACHE CHECK (enriched results normalized to boolean) ──
             let cacheStatus = {};
             if (debrid.isEnabled && dbStreams.length > 0) {
                 const allHashes = [...new Set(dbStreams.map(s => s.infohash))];
