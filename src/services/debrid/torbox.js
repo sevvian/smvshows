@@ -81,7 +81,7 @@ if (!config.isTorboxEnabled) {
         return true;
     }
 
-    // ── v3.0.1: Active Slot Management ───────────────────────────
+    // ── Active Slot Management ───────────────────────────────────
     const ACTIVE_STATES = new Set([
         'downloading', 'metadl', 'checkingresumedata',
         'stalled (no seeds)', 'uploading', 'seeding'
@@ -140,36 +140,21 @@ if (!config.isTorboxEnabled) {
     }
 
     // ── Helpers ───────────────────────────────────────────────────
-    async function fetchRawTorrentInfo(numericId) {
-        let hash = torrentIdToHash.get(numericId);
-        if (!hash && TorboxIdMap) {
-            try {
-                const row = await TorboxIdMap.findByPk(numericId);
-                if (row) { hash = row.hash; torrentIdToHash.set(numericId, hash); }
-            } catch (e) {
-                logger.warn({ numericId, err: e.message }, 'Failed to recover hash from TorboxIdMap.');
-            }
-        }
-        if (!hash) throw new ResourceNotFoundError(`Torrent ID ${numericId} not found.`);
-
-        logger.info({ torrentId: numericId, hash }, 'Requesting torrent info from TorBox...');
-        const { data } = await tbApi.get('/torrents/torrentinfo', { params: { hash } });
-        const payload = data.data || data;
-        return payload;
-    }
-
-    async function fetchTorrentStatus(torrentId) {
-        try {
-            logger.info({ torrentId }, 'Requesting torrent status from TorBox via /mylist...');
-            const { data } = await tbApi.get('/torrents/mylist', { params: { id: torrentId } });
-            const list = data.data || data;
-            const item = Array.isArray(list) ? list[0] : list;
-            const rawStatus = item ? (item.download_state || item.status || 'MISSING') : 'MISSING';
-            return rawStatus;
-        } catch (error) {
-            logger.warn({ torrentId, err: error.message }, 'Failed to fetch torrent status via /mylist');
-            return 'MISSING';
-        }
+    /**
+     * Fetch the full torrent info (including real file IDs) from the user's
+     * torrent list. Replaces the old /torrentinfo call.
+     */
+    async function fetchFullTorrentInfo(torrentId) {
+        logger.info({ torrentId }, 'Requesting torrent details from TorBox via /mylist...');
+        const { data } = await tbApi.get('/torrents/mylist', {
+            params: { id: torrentId }
+        });
+        logger.info({ mylistFullResponse: JSON.stringify(data).substring(0, 2000) }, 'TorBox mylist full response');
+        const list = data.data || data;
+        // The API returns a single object when ?id= is given
+        const item = Array.isArray(list) ? list[0] : list;
+        if (!item) throw new ResourceNotFoundError(`Torrent ID ${torrentId} not found in user list.`);
+        return item;
     }
 
     async function requestDownloadLink(torrentId, fileId) {
@@ -189,7 +174,7 @@ if (!config.isTorboxEnabled) {
         return 'downloading';
     }
 
-    // ── 1. addMagnet (with active slot cleanup) ──────────────────
+    // ── 1. addMagnet ──────────────────────────────────────────────
     async function addMagnet(magnet) {
         const infohash = extractInfoHash(magnet);
         if (infohash && recentMagnetAdds.has(infohash)) {
@@ -255,27 +240,28 @@ if (!config.isTorboxEnabled) {
         throw lastError || new Error('Failed to add magnet to TorBox.');
     }
 
-    // ── 2. getTorrentInfo ─────────────────────────────────────────
+    // ── 2. getTorrentInfo (now uses mylist, returns real file IDs) ─
     async function getTorrentInfo(id) {
         try {
-            const payload = await fetchRawTorrentInfo(id);
-            const rawStatus = await fetchTorrentStatus(id);
+            const torrent = await fetchFullTorrentInfo(id);
+            const rawStatus = torrent.download_state || torrent.status || 'MISSING';
             const tbStatus = mapStatus(rawStatus);
 
             const selectedSet = torrentSelections.get(id) || new Set();
-            const files = (payload.files || []).map((f, idx) => ({
-                id: idx,
+            // files now contain the real file ID from TorBox
+            const files = (torrent.files || []).map(f => ({
+                id: f.id,                      // ← real file ID
                 path: f.name,
                 bytes: f.size,
-                selected: selectedSet.size === 0 || selectedSet.has(idx) ? 1 : 0
+                selected: selectedSet.size === 0 || selectedSet.has(f.id) ? 1 : 0
             }));
 
             const links = [];
-            if (tbStatus === 'downloaded' && payload.files) {
-                payload.files.forEach(() => links.push(null));
+            if (tbStatus === 'downloaded' && torrent.files) {
+                torrent.files.forEach(() => links.push(null));  // placeholder
             }
 
-            return { id, filename: payload.name, status: tbStatus, files, links };
+            return { id, filename: torrent.name, status: tbStatus, files, links };
         } catch (error) {
             if (error instanceof ResourceNotFoundError) throw error;
             if (error.response?.status === 404) throw new ResourceNotFoundError(`Torrent ID ${id} not found on TorBox.`);
@@ -283,12 +269,12 @@ if (!config.isTorboxEnabled) {
         }
     }
 
-    // ── 3. selectFiles ────────────────────────────────────────────
+    // ── 3. selectFiles (now uses real file IDs) ──────────────────
     async function selectFiles(id, fileIds = 'all') {
         try {
+            const torrent = await fetchFullTorrentInfo(id);
             if (fileIds === 'all') {
-                const info = await fetchRawTorrentInfo(id);
-                const allIds = (info.files || []).map((_, idx) => idx);
+                const allIds = (torrent.files || []).map(f => f.id);
                 torrentSelections.set(id, new Set(allIds));
             } else {
                 const ids = String(fileIds).split(',').map(Number);
@@ -325,7 +311,7 @@ if (!config.isTorboxEnabled) {
         }
     }
 
-    // ── 6. checkCached (POST with JSON body) ─────────────────────
+    // ── 6. checkCached (POST with JSON body, as before) ──────────
     async function checkCached(hashes) {
         if (!Array.isArray(hashes) || hashes.length === 0) return {};
 
@@ -372,13 +358,12 @@ if (!config.isTorboxEnabled) {
         }
     }
 
-    // ── 7. getCachedFileInfo (match by file NAME, not index) ──────────
+    // ── 7. getCachedFileInfo (match by name) ──────────────────────
     async function getCachedFileInfo(hash, fileName) {
         const cacheResult = await checkCached([hash]);
         const info = cacheResult[hash];
         if (!info || !info.cached || !Array.isArray(info.files)) return null;
 
-        // Find the file whose name ends with the given fileName (the cache may use full paths)
         const file = info.files.find(f => f.name.endsWith(fileName) || f.name === fileName);
         if (!file) return null;
 
@@ -390,7 +375,7 @@ if (!config.isTorboxEnabled) {
         }, 'TorBox getCachedFileInfo matched by name');
 
         return {
-            id: file.id,          // real file ID from TorBox
+            id: file.id,
             path: file.name,
             bytes: file.size,
             torrentName: info.name,
