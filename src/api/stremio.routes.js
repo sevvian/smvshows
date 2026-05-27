@@ -1,3 +1,4 @@
+// src/api/stremio.routes.js
 const express = require('express');
 const router = express.Router();
 const config = require('../config/config');
@@ -451,6 +452,16 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
                     if (largest) {
                         fileIndex = info.files.findIndex(f => f.path === largest.path);
                     }
+                }
+
+                // Log the matched file info for visual confirmation
+                if (fileIndex !== -1 && info.files[fileIndex]) {
+                    logger.info({
+                        requestedEpisode,
+                        matchedFile: info.files[fileIndex].path,
+                        fileIndex,
+                        torrentId
+                    }, 'Episode matched to file in torrent');
                 }
 
                 // 2. Request single link if provider supports it
