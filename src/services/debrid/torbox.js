@@ -325,18 +325,24 @@ if (!config.isTorboxEnabled) {
         }
     }
 
-    // ── 6. checkCached (NOW WITH list_files=true) ───────────────
+    // ── 6. checkCached (POST with JSON body) ─────────────────────
     async function checkCached(hashes) {
         if (!Array.isArray(hashes) || hashes.length === 0) return {};
 
+        // Build JSON body as per TorBox API: { hashes: [...] }
+        const body = { hashes };
+
+        // Optional: format and list_files can be query params
+        const params = {
+            format: 'object',
+            list_files: true
+        };
+
+        logger.info({ url: '/torrents/checkcached', body }, 'TorBox checkCached request');
+
         try {
-            const { data } = await tbApi.post('/torrents/checkcached', null, {
-                params: {
-                    hash: hashes,
-                    format: 'object',
-                    list_files: true   // ✅ Request file info for cached torrents
-                }
-            });
+            const response = await tbApi.post('/torrents/checkcached', body, { params });
+            const data = response.data;
             logger.info({ checkCachedResponse: JSON.stringify(data).substring(0, 500) }, 'TorBox checkCached raw response');
 
             let payload = data.data || data;
@@ -346,12 +352,11 @@ if (!config.isTorboxEnabled) {
             for (const hash of hashes) {
                 const value = payload[hash];
                 if (typeof value === 'object' && value !== null) {
-                    // Contains file info: { name, size, hash, files: [{id, name, size, ...}] }
                     result[hash] = {
                         cached: true,
                         name: value.name,
                         size: value.size,
-                        files: value.files || []   // ← includes actual file IDs!
+                        files: value.files || []
                     };
                 } else {
                     result[hash] = { cached: !!value, files: [] };
@@ -370,7 +375,7 @@ if (!config.isTorboxEnabled) {
         }
     }
 
-    // ── 7. getCachedFileInfo (NEW: extract file info from cache) ─
+    // ── 7. getCachedFileInfo ──────────────────────────────────────
     async function getCachedFileInfo(hash, fileIndex) {
         const cacheResult = await checkCached([hash]);
         const info = cacheResult[hash];
@@ -380,7 +385,7 @@ if (!config.isTorboxEnabled) {
         if (!file) return null;
 
         return {
-            id: file.id,          // ✅ Real file ID from TorBox
+            id: file.id,          // real file ID from TorBox
             path: file.name,
             bytes: file.size,
             torrentName: info.name,
@@ -388,7 +393,7 @@ if (!config.isTorboxEnabled) {
         };
     }
 
-    // ── 8. getDownloadLinkForFile (single file download) ──────────
+    // ── 8. getDownloadLinkForFile ─────────────────────────────────
     async function getDownloadLinkForFile(torrentId, fileId) {
         logger.info({ torrentId, fileId }, 'Requesting single file download link from TorBox...');
         const { data } = await tbApi.get('/torrents/requestdl', {
