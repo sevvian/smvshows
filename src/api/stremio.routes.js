@@ -490,6 +490,7 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
                 // ── Single‑file download link ──
                 let downloadUrl = null;
 
+                // 1. Find the right file in the fresh info
                 let fileIndex = -1;
                 if (requestedEpisode && requestedEpisode > 0) {
                     const match = tryMatchEpisode(info.files, requestedEpisode);
@@ -505,19 +506,23 @@ router.get('/rd-add/:infohash/:episode.json', async (req, res) => {
                         requestedEpisode,
                         matchedFile: info.files[fileIndex].path,
                         fileIndex,
-                        torrentId
+                        torrentId,
+                        realFileId: info.files[fileIndex].id
                     }, 'Episode matched to file in torrent');
                 }
 
+                // 2. Request the download link using the REAL file ID from the torrent info
                 if (fileIndex !== -1 && typeof debrid.getDownloadLinkForFile === 'function') {
+                    const realFileId = info.files[fileIndex].id;   // already a real TorBox file ID
                     try {
-                        downloadUrl = await debrid.getDownloadLinkForFile(torrentId, fileIndex);
+                        downloadUrl = await debrid.getDownloadLinkForFile(torrentId, realFileId);
                     } catch (e) {
-                        logger.warn({ torrentId, fileIndex, err: e.message },
+                        logger.warn({ torrentId, realFileId, err: e.message },
                             'Single file download link failed, falling back to unrestrict.');
                     }
                 }
 
+                // 3. Fallback to stored links (Real‑Debrid)
                 if (!downloadUrl && Array.isArray(info.links) && info.links[fileIndex]) {
                     const unrestricted = await debrid.unrestrictLink(info.links[fileIndex]);
                     downloadUrl = unrestricted?.download || null;
