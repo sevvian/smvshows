@@ -340,7 +340,6 @@ if (!config.isTorboxEnabled) {
         try {
             const response = await tbApi.post('/torrents/checkcached', body, { params });
             const data = response.data;
-            // Log the full response (up to 2000 chars) so file details are visible
             logger.info({ checkCachedResponse: JSON.stringify(data).substring(0, 2000) }, 'TorBox checkCached raw response');
 
             let payload = data.data || data;
@@ -373,21 +372,22 @@ if (!config.isTorboxEnabled) {
         }
     }
 
-    // ── 7. getCachedFileInfo (with detailed match logging) ────────
-    async function getCachedFileInfo(hash, fileIndex) {
+    // ── 7. getCachedFileInfo (match by file NAME, not index) ──────────
+    async function getCachedFileInfo(hash, fileName) {
         const cacheResult = await checkCached([hash]);
         const info = cacheResult[hash];
         if (!info || !info.cached || !Array.isArray(info.files)) return null;
 
-        const file = info.files[fileIndex];
+        // Find the file whose name ends with the given fileName (the cache may use full paths)
+        const file = info.files.find(f => f.name.endsWith(fileName) || f.name === fileName);
         if (!file) return null;
 
         logger.info({
             hash,
-            fileIndex,
+            fileName,
             fileId: file.id,
-            fileName: file.name
-        }, 'TorBox getCachedFileInfo matched');
+            matchedFile: file.name
+        }, 'TorBox getCachedFileInfo matched by name');
 
         return {
             id: file.id,          // real file ID from TorBox
