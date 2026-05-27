@@ -80,6 +80,91 @@ if (!config.isTorboxEnabled) {
         return true;
     }
 
+    // ── v3.0.1: Active Slot Management ───────────────────────────
+    const ACTIVE_STATES = new Set([
+        'downloading', 'metadl', 'checkingresumedata',
+        'stalled (no seeds)', 'uploading', 'seeding'
+    ]);
+    const STALE_STATES = new Set([
+        'stalled (no seeds)', 'paused', 'error', 'failed', 'missingfiles', 'expired'
+    ]);
+
+    /**
+     * Count torrents in "active" states (consuming a download/seeding slot).
+     * Returns { count, staleList } where staleList is torrent IDs that can be removed.
+     */
+    async function getActiveTorrentCount() {
+        try {
+            const { data } = await tbApi.get('/torrents/mylist');
+            logger.debug({ mylistResponse: JSON.stringify(data).substring(0, 500) }, 'TorBox mylist raw response');
+            const list = data.data || data;
+            if (!Array.isArray(list)) return { count: -1, staleList: [] };
+
+            const active = list.filter(t => ACTIVE_STATES.has((t.status || '').toLowerCase()));
+            const stale = active.filter(t => STALE_STATES.has((t.status || '').toLowerCase()));
+
+            logger.info({ activeCount: active.length, staleCount: stale.length },
+                'TorBox active torrent count');
+            return {
+                count: active.length,
+                staleList: stale.map(t => t.id)
+            };
+        } catch (e) {
+            logger.warn({ err: e.message }, 'Failed to count active torrents via /mylist.');
+            return { count: -1, staleList: [] };
+        }
+    }
+
+    /**
+     * Delete a torrent by ID using POST /torrents/controltorrent.
+     */
+    async function deleteTorrent(torrentId) {
+        try {
+            logger.info({ torrentId }, 'Deleting torrent from TorBox...');
+            const form = new FormData();
+            form.append('id', torrentId);
+            form.append('action', 'delete');
+            const response = await tbApi.post('/torrents/controltorrent', form, {
+                headers: form.getHeaders()
+            });
+            logger.info({ responseData: JSON.stringify(response.data).substring(0, 200) },
+                'TorBox controltorrent (delete) response');
+            return true;
+        } catch (error) {
+            logger.warn({ torrentId, err: error.message }, 'Failed to delete torrent from TorBox.');
+            return false;
+        }
+    }
+
+    /**
+     * If active torrent count is at or above maxActive, remove stale torrents
+     * (stalled, paused, errored, failed, missingfiles, expired) to make room.
+     * Removes oldest stale torrents first until we're under the limit.
+     */
+    async function cleanupStaleActiveTorrents(maxActive) {
+        if (maxActive <= 0) return; // no limit configured
+
+        const { count, staleList } = await getActiveTorrentCount();
+        if (count < 0 || count < maxActive) return; // under limit or unknown
+
+        const needToRemove = count - maxActive + 1; // +1 to make room for the new one
+        const toRemove = staleList.slice(0, Math.min(needToRemove, staleList.length));
+
+        if (toRemove.length === 0) {
+            logger.warn({ activeCount: count, maxActive },
+                'All active torrent slots are full and no stale torrents to remove.');
+            return;
+        }
+
+        logger.info({ activeCount: count, maxActive, removing: toRemove },
+            'Cleaning up stale active torrents to make room.');
+        for (const id of toRemove) {
+            await deleteTorrent(id);
+            // Also clean up local mapping
+            torrentIdToHash.delete(id);
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────
     async function fetchRawTorrentInfo(numericId) {
         let hash = torrentIdToHash.get(numericId);
@@ -137,7 +222,7 @@ if (!config.isTorboxEnabled) {
         return 'downloading';
     }
 
-    // ── 1. addMagnet ──────────────────────────────────────────────
+    // ── 1. addMagnet (with active slot cleanup) ──────────────────
     async function addMagnet(magnet) {
         const infohash = extractInfoHash(magnet);
         if (infohash && recentMagnetAdds.has(infohash)) {
@@ -150,6 +235,12 @@ if (!config.isTorboxEnabled) {
         if (!checkAddMagnetRateLimit()) {
             logger.warn('addMagnet rate limit exceeded (8/min). Rejecting request.');
             throw new Error('TorBox addMagnet rate limit exceeded. Please wait and retry.');
+        }
+
+        // ── Active slot cleanup before adding ──
+        const maxActive = parseInt(process.env.TORBOX_MAX_ACTIVE_TORRENTS, 10) || 0;
+        if (maxActive > 0) {
+            await cleanupStaleActiveTorrents(maxActive);
         }
 
         let lastError = null;
@@ -190,7 +281,12 @@ if (!config.isTorboxEnabled) {
                 lastError = error;
                 const errCode = (error.response?.data || {}).error || '';
                 if (errCode === 'ACTIVE_LIMIT') {
-                    if (attempt < 2) { await sleep(5000 * Math.pow(2, attempt)); continue; }
+                    if (attempt < 2) {
+                        const waitMs = 5000 * Math.pow(2, attempt);
+                        logger.warn({ errCode, attempt, waitMs }, 'TorBox ACTIVE_LIMIT error. Retrying after backoff.');
+                        await sleep(waitMs);
+                        continue;
+                    }
                 }
                 break;
             }
@@ -207,18 +303,14 @@ if (!config.isTorboxEnabled) {
 
             const selectedSet = torrentSelections.get(id) || new Set();
             const files = (payload.files || []).map((f, idx) => ({
-                id: idx,                    // array index is the file_id
+                id: idx,
                 path: f.name,
                 bytes: f.size,
                 selected: selectedSet.size === 0 || selectedSet.has(idx) ? 1 : 0
             }));
 
             const links = [];
-            // We still populate the links array so the DB snapshot is complete,
-            // but we no longer generate all links eagerly during polling.
-            // The actual download URL for a specific episode is obtained via getDownloadLinkForFile.
             if (tbStatus === 'downloaded' && payload.files) {
-                // Fill the array with null placeholders (will be replaced when needed)
                 payload.files.forEach(() => links.push(null));
             }
 
@@ -292,16 +384,11 @@ if (!config.isTorboxEnabled) {
         }
     }
 
-    // ── 7. getDownloadLinkForFile (NEW – single file download) ──
+    // ── 7. getDownloadLinkForFile (single file download) ──────────
     async function getDownloadLinkForFile(torrentId, fileId) {
         logger.info({ torrentId, fileId }, 'Requesting single file download link from TorBox...');
         const { data } = await tbApi.get('/torrents/requestdl', {
-            params: {
-                token: config.torboxApiKey,
-                torrent_id: torrentId,
-                file_id: fileId,
-                redirect: false
-            }
+            params: { token: config.torboxApiKey, torrent_id: torrentId, file_id: fileId, redirect: false }
         });
         logger.info({ requestdlResponse: JSON.stringify(data).substring(0, 300) }, 'TorBox single requestdl raw response');
         const payload = data.data || data;
